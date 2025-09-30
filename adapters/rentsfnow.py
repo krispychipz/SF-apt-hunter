@@ -10,7 +10,7 @@ from models import Listing
 
 LOGGER = logging.getLogger(__name__)
 
-_NEXT_DATA_RE = re.compile(r"<script[^>]*id=\"__NEXT_DATA__\"[^>]*>(.*?)</script>", re.S)
+_NEXT_DATA_RE = re.compile(r"<script[^>]*id=[\"']__NEXT_DATA__[\"'][^>]*>(.*?)</script>", re.S)
 _ASSIGNMENT_RES = [
     re.compile(r"window\.__NUXT__\s*=\s*(\{.*?\})\s*;", re.S),
     re.compile(r"window\.__NEXT_DATA__\s*=\s*(\{.*?\})\s*;", re.S),
@@ -59,7 +59,14 @@ class RentSFNowAdapter(SiteAdapter):
         response = await self.fetch.get(url)
         seen_urls: set[str] = set()
 
-        for payload in self._extract_payloads(response.text):
+        payloads = self._extract_payloads(response.text)
+        if not payloads:
+            payloads = await self._rentpress_payloads()
+            if not payloads:
+                LOGGER.warning("%s: no payloads discovered from search or API", self.name)
+                return
+
+        for payload in payloads:
             for unit, context in self._iter_units(payload):
                 listing = self._build_listing(unit, context)
                 if listing is None:
@@ -89,6 +96,53 @@ class RentSFNowAdapter(SiteAdapter):
             LOGGER.warning("%s: could not find structured payloads", self.name)
         return blobs
 
+    async def _rentpress_payloads(self) -> List[Any]:
+        """Fallback to the RentPress JSON API when HTML embeds are missing."""
+
+        results: List[Any] = []
+        base = urljoin(self.BASE_URL, "/wp-json/rentpress/v1/floorplans/")
+        page = 1
+        per_page = 100
+
+        while True:
+            params: Dict[str, Any] = {
+                "availability": "available",
+                "page": page,
+                "per_page": per_page,
+            }
+
+            try:
+                response = await self.fetch.get(f"{base}?{urlencode(params)}")
+            except Exception as exc:  # pragma: no cover - network failure fallback
+                LOGGER.warning("%s: RentPress request failed on page %s (%s)", self.name, page, exc)
+                break
+
+            try:
+                payload = response.json()
+            except ValueError:  # pragma: no cover - unexpected body
+                LOGGER.debug("%s: RentPress payload was not JSON", self.name)
+                break
+
+            results.append(payload)
+
+            items = self._extract_sequence(payload)
+            if not items or len(items) < per_page:
+                break
+
+            page += 1
+
+        return results
+
+    def _extract_sequence(self, payload: Any) -> List[Any]:
+        if isinstance(payload, list):
+            return payload
+        if isinstance(payload, dict):
+            for key in ("items", "results", "data", "floorplans"):
+                value = payload.get(key)
+                if isinstance(value, list):
+                    return value
+        return []
+
     def _decode_json(self, raw: str) -> Optional[Any]:
         cleaned = raw.strip().rstrip("</script>").rstrip(";")
         try:
@@ -102,7 +156,13 @@ class RentSFNowAdapter(SiteAdapter):
         for node in self._walk(payload):
             if not isinstance(node, dict):
                 continue
-            slug = node.get("slug") or node.get("id") or node.get("propertyId")
+            slug = (
+                node.get("slug")
+                or node.get("id")
+                or node.get("ID")
+                or node.get("propertyId")
+                or node.get("property_id")
+            )
             if not slug:
                 continue
             if any(key in node for key in ("neighborhood", "neighborhoodName", "address")):
@@ -114,7 +174,12 @@ class RentSFNowAdapter(SiteAdapter):
             if not self._looks_like_unit(node):
                 continue
             context: Dict[str, Any] = {}
-            prop_ref = node.get("property") or node.get("propertyId") or node.get("property_id")
+            prop_ref = (
+                node.get("property")
+                or node.get("propertyId")
+                or node.get("property_id")
+                or node.get("propertyID")
+            )
             if isinstance(prop_ref, dict):
                 context = prop_ref
             elif prop_ref and str(prop_ref) in property_map:
@@ -132,6 +197,10 @@ class RentSFNowAdapter(SiteAdapter):
                 "availability_url",
                 "canonicalUrl",
                 "floorPlanUrl",
+                "permalink_floorplan",
+                "floorplan_permalink",
+                "unit_permalink",
+                "unitUrl",
             ),
         )
         return bedrooms is not None and bool(url)
@@ -145,6 +214,11 @@ class RentSFNowAdapter(SiteAdapter):
                 "availabilityUrl",
                 "availability_url",
                 "canonicalUrl",
+                "permalink",
+                "permalink_floorplan",
+                "floorplan_permalink",
+                "unit_permalink",
+                "unitUrl",
             ),
         )
         if not url:
@@ -152,21 +226,60 @@ class RentSFNowAdapter(SiteAdapter):
         full_url = urljoin(self.BASE_URL, str(url))
 
         floorplan = self._first_value((unit,), ("name", "title", "floorplan", "floorplanName"))
-        property_name = self._first_value((context, unit), ("propertyName", "property", "buildingName"))
+        property_name = self._first_value(
+            (context, unit),
+            (
+                "propertyName",
+                "property",
+                "buildingName",
+                "property_name",
+                "propertyLabel",
+            ),
+        )
         title_parts = [part for part in (property_name, floorplan) if part]
         title = " – ".join(map(str, title_parts)) if title_parts else "RentSFNow Listing"
 
         address = self._first_value((unit, context), ("address", "address1", "street", "fullAddress")) or ""
         neighborhood = self._first_value(
             (unit, context),
-            ("neighborhood", "neighborhoodName", "neighborhood_text"),
+            (
+                "neighborhood",
+                "neighborhoodName",
+                "neighborhood_text",
+                "neighborhoodNameText",
+                "neighborhood_text_display",
+            ),
         )
 
         bedrooms = self._first_value((unit,), ("bedrooms", "beds", "bedsMin", "bedsMax"))
-        bathrooms = self._first_value((unit,), ("bathrooms", "baths", "bathsMin", "bathsMax"))
+        bathrooms = self._first_value(
+            (unit,),
+            (
+                "bathrooms",
+                "baths",
+                "bathsMin",
+                "bathsMax",
+                "bathroomsMin",
+                "bathroomsMax",
+            ),
+        )
         rent = self._first_value(
             (unit,),
-            ("rent", "price", "minRent", "maxRent", "marketRent", "effectiveRent", "monthlyRent"),
+            (
+                "rent",
+                "price",
+                "minRent",
+                "maxRent",
+                "marketRent",
+                "effectiveRent",
+                "monthlyRent",
+                "min_rent",
+                "max_rent",
+                "rent_min",
+                "rent_max",
+                "price_min",
+                "price_max",
+            ),
         )
 
         try:
