@@ -1,0 +1,9 @@
+httpx
+PyYAML
+selectolax
+jsonpath-ng
+Typer
+tenacity
+pydantic
+playwright
+pytest

@@ -1,0 +1,13 @@
+{
+  "listings": [
+    {
+      "title": "580 Haight #2",
+      "address": "580 Haight St",
+      "beds": 2,
+      "baths": 1,
+      "rent_min": 3995,
+      "rent_max": 3995,
+      "url": "https://www.mosserliving.com/listings/580-haight-2"
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+name: RentSFNow
+seeds:
+  - https://www.rentsfnow.com/hayes-valley
+strategy_order:
+  - jsonld
+  - xhr
+  - dom
+rate_limit: 1.5
+jsonld:
+  unit_paths:
+    - $.offers[*]
+  field_map:
+    title: $.name
+    address: $.address.streetAddress
+    beds: $.additionalProperty[?(@.name=='beds')].value
+    baths: $.additionalProperty[?(@.name=='baths')].value
+    sqft: $.additionalProperty[?(@.name=='sqft')].value
+    rent: $.price
+    available_date: $.availabilityStarts
+    url: $.url
+xhr:
+  endpoints:
+    - https://www.rentsfnow.com/api/hayes.json
+  unit_paths:
+    - $.data.units[*]
+  field_map:
+    title: $.title
+    address: $.address
+    beds: $.beds
+    baths: $.baths
+    sqft: $.sqft
+    rent_min: $.rent.min
+    rent_max: $.rent.max
+    available_date: $.available
+    url: $.url
+dom:
+  list_selector: article.unit
+  field_selectors:
+    title: h2
+    rent: .rent
+    beds: .beds
+    baths: .baths
+    sqft: .sqft
+    url: a::attr(href)
+  regex_helpers:
+    rent: "\$(\\d+[\\,\\d]*)"
+hints:
+  neighborhood_from_seed:
+    https://www.rentsfnow.com/hayes-valley: Hayes Valley

@@ -1,0 +1,56 @@
+# Schema for site configuration files
+name: string # optional human readable name
+seeds: # list of seed URLs to crawl
+  - https://example.com/listings
+strategy_order: [jsonld, xhr, dom]
+rate_limit: seconds_between_requests
+jsonld:
+  unit_paths:
+    - $.offers[*]
+  field_map:
+    title: $.name
+    address: $.address.streetAddress
+    beds: $.numberOfRooms
+    baths: $.numberOfBathroomsTotal
+    rent: $.offers.price
+xhr:
+  endpoints:
+    - /api/units.json
+  unit_paths:
+    - $.data.units[*]
+  field_map:
+    title: $.title
+    address: $.address
+    beds: $.beds
+    baths: $.baths
+    rent_min: $.rent.min
+    rent_max: $.rent.max
+    available_date: $.available
+    url: $.url
+  headers: optional_extra_headers
+  auth: optional
+  notes: optional
+  # endpoints can be regex strings matched in Playwright capture to select relevant JSON
+  # or relative paths appended to the seed URL
+  # field_map JSONPaths are evaluated against each unit node
+  # unit_paths define how to reach each unit from the JSON response
+  # jsonld.unit_paths works the same for structured markup in HTML
+  # dom selectors are CSS selectors applied to the HTML
+  # regex_helpers provide extraction helpers when a selector returns composite text
+  # hints can provide fallback neighborhood mapping by seed prefix
+  # rate_limit controls polite crawling interval per site in seconds
+dom:
+  list_selector: "section.unit-card"
+  field_selectors:
+    title: "h2"
+    rent: ".rent"
+    beds: ".beds"
+    baths: ".baths"
+    sqft: ".sqft"
+    url: "a::attr(href)"
+  regex_helpers:
+    rent: "\$(\\d+[\\,\\d]*)"
+hints:
+  neighborhood_from_seed:
+    https://example.com/hayes: Hayes Valley
+    https://example.com/haight: Lower Haight
