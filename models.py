@@ -1,6 +1,7 @@
 # models.py
-from pydantic import BaseModel, HttpUrl, validator
-from typing import Optional, List
+from typing import List, Optional
+
+from pydantic import BaseModel, Field, HttpUrl, validator
 
 class Listing(BaseModel):
     source: str
@@ -11,7 +12,7 @@ class Listing(BaseModel):
     bathrooms: Optional[float] = None
     rent_monthly_usd: Optional[int] = None
     neighborhood_text: Optional[str] = None
-    photos: List[HttpUrl] = []
+    photos: List[HttpUrl] = Field(default_factory=list)
 
     @validator("bedrooms", "bathrooms", pre=True)
     def coerce_float(cls, v):
