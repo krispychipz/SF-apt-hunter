@@ -7,14 +7,13 @@ from criteria import matches
 from notify import email_alert
 
 # Adapters go here
-from adapters.example_site import ExampleSite
+from adapters.rentsfnow import RentSFNowAdapter
 
 async def run() -> None:
     found: List[Listing] = []
     fetch = Fetcher(concurrency=8, base_delay=0.6)
     adapters = [
-        ExampleSite(fetch),
-        # Add more: AnotherSite(fetch), ThirdSite(fetch)
+        RentSFNowAdapter(fetch),
     ]
     try:
         for adapter in adapters:
