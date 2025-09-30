@@ -1,0 +1,19 @@
+{
+  "data": {
+    "units": [
+      {
+        "title": "300 Hayes #4B",
+        "address": "300 Hayes St",
+        "beds": 2,
+        "baths": 1,
+        "sqft": 820,
+        "rent": {
+          "min": 4200,
+          "max": 4200
+        },
+        "available": "2024-05-01",
+        "url": "https://www.rentsfnow.com/listings/300-hayes-4b"
+      }
+    ]
+  }
+}
