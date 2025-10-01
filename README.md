@@ -7,9 +7,9 @@ Although the repository currently focuses on robust HTML parsing, the broader wo
 
 ## End-to-end pipeline
 
-1. **Configuration ingestion** – Load `sites.yaml`, which enumerates source URLs and any per-site overrides (e.g., HTTP headers, throttling, or site-specific filter defaults). A lightweight orchestration script can iterate this collection, fetch the latest markup, and hand it to the extractor.
-2. **Acquisition & parsing** – Each HTML payload is decoded and parsed with BeautifulSoup (or a bundled fallback) before being scanned for listing containers that mention prices and bedroom/bath tokens.
-3. **Normalization & filtering** – Containers are converted into `Unit` objects by harvesting address, bedroom, bathroom, rent, and neighborhood attributes through reusable heuristics. Deduplication is enforced on the `(address, bedrooms, bathrooms, rent)` identity tuple so downstream filtering sees only unique units.
+1. **Configuration ingestion** – Load `sites.yaml`, which enumerates source URLs and any per-site overrides (e.g., HTTP headers, throttling, or site-specific filter defaults). The CLI and :mod:`parser.workflow` helpers iterate this collection, fetch the latest markup, and hand it to the extractor.
+2. **Acquisition & parsing** – Each HTML payload is decoded and parsed with BeautifulSoup (or a bundled fallback) before being scanned for listing containers that mention prices and bedroom/bath tokens. When running via ``--sites-yaml``, HTML snapshots can optionally be persisted to disk for auditing.
+3. **Normalization & filtering** – Containers are converted into `Unit` objects by harvesting address, bedroom, bathroom, rent, and neighborhood attributes through reusable heuristics. Deduplication is enforced on the `(address, bedrooms, bathrooms, rent)` identity tuple so downstream filtering sees only unique units. Built-in filtering lets you constrain bedroom count, rent ceilings, and neighborhood allow-lists directly from the CLI.
 4. **Alert dispatch** – A post-processing layer evaluates business rules (neighborhood, bedroom count, price ceilings) against the parsed units and assembles email digests summarizing matching listings. Integrating with an SMTP relay or transactional email API completes the notification loop.
 
 ## Core modules
@@ -39,6 +39,16 @@ Defines the `Unit` dataclass, encapsulating the structured listing attributes, a
 - **Email delivery** – Assemble matching units into HTML or plaintext templates and send them via SMTP or services like SendGrid or AWS SES. Consider deduplicating alerts by unit identity to prevent repeated notifications for unchanged listings.
 
 ## Usage example
+
+### Batch processing via `sites.yaml`
+
+```bash
+parser-cli --sites-yaml parser/sites.yaml --min-bedrooms 2 --max-rent 3500 --neighborhood Mission --pretty
+```
+
+This command loads every site defined in ``sites.yaml``, downloads the HTML for each, extracts units, filters them using the provided bedroom/rent/neighborhood criteria, and emits a deduplicated JSON array of matching units.
+
+### Single HTML extraction
 
 ```bash
 parser-cli --html downloads/mission.html --url https://example.com/listing-page --pretty
