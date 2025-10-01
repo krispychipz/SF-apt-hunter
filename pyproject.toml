@@ -1,0 +1,20 @@
+[build-system]
+requires = ["setuptools", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "sf-apt-hunter"
+version = "0.1.0"
+description = "Apartment listing extractor"
+requires-python = ">=3.11"
+dependencies = [
+    "beautifulsoup4",
+    "lxml",
+]
+
+[project.scripts]
+parser-cli = "parser.cli:main"
+
+[tool.pytest.ini_options]
+pythonpath = ["."]
+addopts = "-q"
