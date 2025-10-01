@@ -33,3 +33,16 @@ class Unit:
             "neighborhood": self.neighborhood,
             "source_url": self.source_url,
         }
+
+@dataclass(slots=True)
+class Site:
+    """Representation of a site that links to apartment listings."""
+
+    slug: str
+    url: str
+
+    def to_dict(self) -> Dict[str, str]:
+        """Return the site definition as a dictionary."""
+
+        return {"slug": self.slug, "url": self.url}
+
