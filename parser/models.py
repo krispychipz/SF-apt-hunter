@@ -34,7 +34,6 @@ class Unit:
             "source_url": self.source_url,
         }
 
-
 @dataclass(slots=True)
 class Site:
     """Representation of a site that links to apartment listings."""
@@ -46,3 +45,4 @@ class Site:
         """Return the site definition as a dictionary."""
 
         return {"slug": self.slug, "url": self.url}
+
