@@ -33,7 +33,7 @@ sites:
     url: "https://utopiamanagement.com/properties/rental-listings-san-francisco-bay-area-ca"  # potential listings page :contentReference[oaicite:0]{index=0}
 
   - slug: structureproperties
-    url: "https://www.structureproperties.com/"  # “roster of properties for rent” lead :contentReference[oaicite:1]{index=1}
-
+    url: "https://structureproperties.com/available-rentals/" 
+    
   - slug: reListo
     url: "https://www.relisto.com/search/unfurnished/"  # property management / leasing in SF :contentReference[oaicite:2]{index=2}
