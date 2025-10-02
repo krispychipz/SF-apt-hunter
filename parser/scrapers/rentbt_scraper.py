@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import time
-from typing import List, Optional
+from typing import Any, List, Optional
 
 import requests
 from bs4 import BeautifulSoup
 
 from parser.heuristics import money_to_int, parse_bathrooms, parse_bedrooms
 from parser.models import Unit
+
+try:  # pragma: no cover - optional dependency
+    import httpx  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback path
+    httpx = None  # type: ignore
 
 BASE_URL = (
     "https://properties.rentbt.com/searchlisting.aspx?ftst=&txtCity=san%20francisco"
@@ -27,7 +32,10 @@ HEADERS = {
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
     "Connection": "keep-alive",
+    "Accept-Encoding": "gzip, deflate, br",
 }
+
+LANDING_URL = "https://properties.rentbt.com/"
 
 
 def _clean_rent(value: Optional[str]) -> Optional[int]:
@@ -57,9 +65,27 @@ def set_page_number(url: str, page: int) -> str:
     )
 
 
-def _get_page(url: str, session: requests.Session, timeout: int = 20) -> str:
-    response = session.get(url, headers=HEADERS, timeout=timeout)
+def _get_page(
+    url: str,
+    *,
+    client: Any,
+    timeout: int = 20,
+    referer: Optional[str] = None,
+) -> str:
+    headers = HEADERS.copy()
+    if referer:
+        headers["Referer"] = referer
+
+    if httpx is not None and isinstance(client, httpx.Client):  # type: ignore[arg-type]
+        response = client.get(url, headers=headers, timeout=httpx.Timeout(timeout))
+    else:
+        response = client.get(url, headers=headers, timeout=timeout)
+
     response.raise_for_status()
+
+    if hasattr(response, "cookies") and hasattr(client, "cookies"):
+        client.cookies.update(response.cookies)
+
     return response.text
 
 
@@ -163,23 +189,65 @@ def fetch_units(
     *,
     pages: int = 1,
     delay: float = 1.0,
-    session: Optional[requests.Session] = None,
+    session: Optional[Any] = None,
     timeout: int = 20,
 ) -> List[Unit]:
     """Fetch RentBT listings from *url*, iterating pagination up to *pages*."""
 
-    http_session = session or requests.Session()
+    if session is not None:
+        http_session = session
+        close_session = lambda: None
+        if hasattr(http_session, "headers"):
+            try:
+                http_session.headers.update(HEADERS)
+            except Exception:
+                pass
+    else:
+        if httpx is not None:
+            http_session = httpx.Client(
+                http2=True,
+                follow_redirects=True,
+                headers=HEADERS,
+                timeout=httpx.Timeout(timeout),
+            )
+            close_session = http_session.close
+        else:  # pragma: no cover - fallback without httpx
+            http_session = requests.Session()
+            http_session.headers.update(HEADERS)
+            close_session = http_session.close
+
     all_units: List[Unit] = []
 
-    for page in range(1, max(1, pages) + 1):
-        page_url = set_page_number(url, page)
-        html = _get_page(page_url, session=http_session, timeout=timeout)
-        units = parse_listings(html, base_url=url)
-        if not units and page > 1:
-            break
-        all_units.extend(units)
-        if delay:
-            time.sleep(delay)
+    try:
+        # Initial landing request to establish cookies and session state.
+        try:
+            _get_page(LANDING_URL, client=http_session, timeout=timeout)
+        except Exception:
+            # Ignore warm-up failures; the main requests will raise if necessary.
+            pass
+
+        referer: Optional[str] = LANDING_URL
+
+        for page in range(1, max(1, pages) + 1):
+            page_url = set_page_number(url, page)
+            html = _get_page(
+                page_url,
+                client=http_session,
+                timeout=timeout,
+                referer=referer,
+            )
+            units = parse_listings(html, base_url=url)
+            if not units and page > 1:
+                break
+            all_units.extend(units)
+            if delay:
+                time.sleep(delay)
+
+            referer = page_url
+
+    finally:
+        if session is None:
+            close_session()
 
     return all_units
 
