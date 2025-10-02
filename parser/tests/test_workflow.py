@@ -78,6 +78,19 @@ def test_collect_units_reports_missing_scraper():
     assert isinstance(result.errors[0].error, RuntimeError)
 
 
+def test_collect_units_uses_scraper_default_url_when_missing():
+    site = Site(slug="site-a", url="")
+
+    def scraper():
+        return [make_unit("333 Oak", 2, 1, 3100, None, "https://example.com/a")]
+
+    result = collect_units_from_sites([site], scrapers={"site-a": scraper})
+
+    assert len(result.site_results) == 1
+    assert result.site_results[0].error is None
+    assert [unit.address for unit in result.units] == ["333 Oak"]
+
+
 def test_workflow_result_single_batch_wraps_units():
     units = [make_unit("X", 1, 1, 2000, "Mission", "https://example.com/x")]
     result = WorkflowResult.single_batch(units)
