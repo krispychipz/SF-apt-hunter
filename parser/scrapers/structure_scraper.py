@@ -1,21 +1,29 @@
 #!/usr/bin/env python3
 from __future__ import annotations
 
+import logging
 import re
-from dataclasses import dataclass
-from typing import List, Optional, Iterable, Set
+from typing import Any, Iterable, List, Optional
 from urllib.parse import urljoin
+
+import random
+import time
 
 import requests
 from bs4 import BeautifulSoup, Tag
-import httpx
-import time
-import random
-from httpx import Timeout
 
 from parser.models import Unit
 
 SEARCH_URL = "https://structureproperties.com/available-rentals/"
+
+try:  # pragma: no cover - optional dependency
+    import httpx  # type: ignore
+except ModuleNotFoundError:  # pragma: no cover - fallback path
+    httpx = None  # type: ignore
+
+
+logger = logging.getLogger(__name__)
+
 
 HEADERS = {
     "User-Agent": (
@@ -62,8 +70,10 @@ def _clean_float(text: Optional[str], kind: str) -> Optional[float]:
         return None
 
 def _get_html(url: str, timeout: int = 20) -> str:
+    logger.debug("Structure Properties legacy fetch %s", url)
     resp = requests.get(url, headers=HEADERS, timeout=timeout)
     resp.raise_for_status()
+    logger.debug("Structure Properties legacy HTTP %s (%d bytes)", resp.status_code, len(resp.content))
     return resp.text
 
 def _candidate_listing_blocks(soup: BeautifulSoup) -> Iterable[Tag]:
@@ -89,6 +99,7 @@ def _candidate_listing_blocks(soup: BeautifulSoup) -> Iterable[Tag]:
                 if hid not in seen:
                     seen.add(hid)
                     yield parent
+    logger.debug("Structure Properties candidate generator yielded %d blocks", len(seen))
 
 def _text(el: Optional[Tag]) -> str:
     return el.get_text(" ", strip=True) if el else ""
@@ -207,6 +218,7 @@ def parse(max_pages: int = 10) -> List[Unit]:
         visited.add(url)
         pages += 1
 
+        logger.debug("Structure Properties legacy pagination fetch %s", url)
         resp = session.get(url, headers=HEADERS, timeout=20)
         resp.raise_for_status()
         soup = BeautifulSoup(resp.text, "lxml")
@@ -214,6 +226,11 @@ def parse(max_pages: int = 10) -> List[Unit]:
         blocks = list(_candidate_listing_blocks(soup))
         if not blocks:
             blocks = soup.find_all("article")
+        logger.debug(
+            "Structure Properties legacy page %d yielded %d block(s)",
+            pages,
+            len(blocks),
+        )
 
         for b in blocks:
             unit = _parse_block(b, base_url=url)
@@ -224,21 +241,35 @@ def parse(max_pages: int = 10) -> List[Unit]:
 
     return units
 
-def get_html(url: str, client: httpx.Client, referer: Optional[str] = None) -> str:
+def get_html(url: str, client: Any, referer: Optional[str] = None) -> str:
     headers = HEADERS.copy()
     if referer:
         headers["Referer"] = referer
+    logger.debug("Structure Properties request %s (referer=%s)", url, referer)
     for attempt in range(3):
-        r = client.get(url, headers=headers, timeout=Timeout(20.0))
+        timeout = httpx.Timeout(20.0) if httpx else 20.0  # type: ignore[union-attr]
+        r = client.get(url, headers=headers, timeout=timeout)
         if r.status_code == 200:
+            logger.debug(
+                "Structure Properties HTTP %s on attempt %d (%d bytes)",
+                r.status_code,
+                attempt + 1,
+                len(r.content),
+            )
             return r.text
         if r.status_code in (403, 429, 503):
             time.sleep(1.0 + attempt + random.uniform(0, 0.5))
             continue
         r.raise_for_status()
     # final try or raise
-    r = client.get(url, headers=headers, timeout=Timeout(20.0))
+    timeout = httpx.Timeout(20.0) if httpx else 20.0  # type: ignore[union-attr]
+    r = client.get(url, headers=headers, timeout=timeout)
     r.raise_for_status()
+    logger.debug(
+        "Structure Properties final retry HTTP %s (%d bytes)",
+        r.status_code,
+        len(r.content),
+    )
     return r.text
 
 def fetch_units(url: str = SEARCH_URL, *, max_pages: int = 10, timeout: int = 20) -> List[Unit]:
@@ -250,33 +281,59 @@ def fetch_units(url: str = SEARCH_URL, *, max_pages: int = 10, timeout: int = 20
     units: List[Unit] = []
     pages = 0
 
-    client = httpx.Client(http2=True, follow_redirects=True, headers=HEADERS)
+    logger.debug("Fetching Structure Properties listings from %s (max_pages=%d)", url, max_pages)
+
+    if httpx is not None:
+        client = httpx.Client(http2=True, follow_redirects=True, headers=HEADERS)
+        close_client = client.close
+    else:  # pragma: no cover - fallback when httpx is unavailable
+        client = requests.Session()
+        client.headers.update(HEADERS)
+        close_client = client.close
 
     # 1) warm up
-    landing_html = get_html(SEARCH_URL, client)
+    try:
+        landing_html = get_html(SEARCH_URL, client)
+        logger.debug("Structure Properties warm-up fetched %d bytes", len(landing_html))
 
-    # 2) start scraping with referer logic
-    referer = SEARCH_URL
-    current_url = url
-    while current_url and pages < max_pages and current_url not in visited:
-        visited.add(current_url)
-        pages += 1
+        # 2) start scraping with referer logic
+        referer = SEARCH_URL
+        current_url = url
+        while current_url and pages < max_pages and current_url not in visited:
+            visited.add(current_url)
+            pages += 1
 
-        html = get_html(current_url, client, referer=referer if pages > 1 else None)
-        soup = BeautifulSoup(html, "lxml")
+            html = get_html(current_url, client, referer=referer if pages > 1 else None)
+            soup = BeautifulSoup(html, "lxml")
 
-        blocks = list(_candidate_listing_blocks(soup))
-        if not blocks:
-            blocks = soup.find_all("article")
+            blocks = list(_candidate_listing_blocks(soup))
+            if not blocks:
+                blocks = soup.find_all("article")
+            logger.debug(
+                "Structure Properties page %d (%s) yielded %d block(s)",
+                pages,
+                current_url,
+                len(blocks),
+            )
 
-        for b in blocks:
-            unit = _parse_block(b, base_url=current_url)
-            if unit:
-                units.append(unit)
+            for b in blocks:
+                unit = _parse_block(b, base_url=current_url)
+                if unit:
+                    if len(units) < 3:
+                        logger.debug(
+                            "Structure Properties sample listing %d: address=%s rent=%s bedrooms=%s",
+                            len(units),
+                            unit.address,
+                            unit.rent,
+                            unit.bedrooms,
+                        )
+                    units.append(unit)
 
-        next_url = _find_next_page(soup, current_url=current_url)
-        referer = current_url
-        current_url = next_url
+            next_url = _find_next_page(soup, current_url=current_url)
+            referer = current_url
+            current_url = next_url
+    finally:
+        close_client()
 
     return units
 

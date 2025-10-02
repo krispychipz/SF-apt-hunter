@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from typing import List, Optional, Tuple
 from urllib.parse import urljoin
 
@@ -10,6 +11,9 @@ import requests
 from bs4 import BeautifulSoup
 
 from parser.models import Unit
+
+
+logger = logging.getLogger(__name__)
 
 LISTINGS_URL = "https://anchorealtyinc.com/residential-rentals/"
 
@@ -145,17 +149,30 @@ def _parse_listing(container: BeautifulSoup, base_url: str) -> Optional[Unit]:
 def parse_listings(html: str, *, base_url: str = LISTINGS_URL) -> List[Unit]:
     soup = BeautifulSoup(html, "lxml")
 
+    containers = soup.select("div.listing-item")
+    logger.debug("Anchor Realty parser located %d potential listing containers", len(containers))
+
     units: List[Unit] = []
-    for container in soup.select("div.listing-item"):
+    for idx, container in enumerate(containers):
         unit = _parse_listing(container, base_url=base_url)
         if unit:
+            if idx < 3:
+                logger.debug(
+                    "Anchor Realty sample listing %d: address=%s rent=%s bedrooms=%s",
+                    idx,
+                    unit.address,
+                    unit.rent,
+                    unit.bedrooms,
+                )
             units.append(unit)
     return units
 
 
 def fetch_units(url: str = LISTINGS_URL, *, timeout: int = 20) -> List[Unit]:
+    logger.debug("Fetching Anchor Realty listings from %s", url)
     response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
+    logger.debug("Anchor Realty HTTP %s (%d bytes)", response.status_code, len(response.content))
     return parse_listings(response.text, base_url=url)
 
 

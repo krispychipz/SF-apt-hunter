@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+import logging
 from typing import List, Optional
 from urllib.parse import urljoin
 
@@ -10,6 +11,9 @@ import requests
 from bs4 import BeautifulSoup
 
 from parser.models import Unit
+
+
+logger = logging.getLogger(__name__)
 
 SEARCH_URL = "https://www.amsires.com/unfurnished-rentals-search"
 
@@ -105,10 +109,21 @@ def parse_listings(html: str, *, base_url: str) -> List[Unit]:
 
     soup = BeautifulSoup(html, "lxml")
 
+    containers = soup.select("div.listing-item")
+    logger.debug("AMS IRES parser located %d potential listing containers", len(containers))
+
     units: List[Unit] = []
-    for div in soup.select("div.listing-item"):
+    for idx, div in enumerate(containers):
         unit = _parse_listing(div, base_url=base_url)
         if unit:
+            if idx < 3:
+                logger.debug(
+                    "AMS IRES sample listing %d: address=%s rent=%s bedrooms=%s",
+                    idx,
+                    unit.address,
+                    unit.rent,
+                    unit.bedrooms,
+                )
             units.append(unit)
     return units
 
@@ -116,8 +131,10 @@ def parse_listings(html: str, *, base_url: str) -> List[Unit]:
 def fetch_units(url: str = SEARCH_URL, *, timeout: int = 20) -> List[Unit]:
     """Fetch and parse AMS IRES listings from *url*."""
 
+    logger.debug("Fetching AMS IRES listings from %s", url)
     response = requests.get(url, headers=HEADERS, timeout=timeout)
     response.raise_for_status()
+    logger.debug("AMS IRES HTTP %s (%d bytes)", response.status_code, len(response.content))
     return parse_listings(response.text, base_url=url)
 
 

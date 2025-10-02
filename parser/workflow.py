@@ -11,6 +11,9 @@ from .models import Site, Unit
 from .scrapers import ScraperFunc, available_scrapers
 
 
+logger = logging.getLogger(__name__)
+
+
 @dataclass(slots=True)
 class SiteProcessingResult:
     """Encapsulates the outcome of running a scraper for a single site."""
@@ -79,10 +82,12 @@ def collect_units_from_sites(
         scraper = registry.get(key)
         if scraper is None:
             error = RuntimeError(f"No scraper registered for site slug '{site.slug}'")
+            logger.error("%s", error)
             site_results.append(SiteProcessingResult(site=site, units=[], error=error))
             continue
 
         try:
+            logger.debug("Running scraper for site '%s' (%s)", site.slug, site.url)
             if site.url:
                 extracted_units = scraper(site.url)
             else:
@@ -93,6 +98,12 @@ def collect_units_from_sites(
                 max_rent=max_rent,
                 neighborhoods=neighborhoods,
             )
+            logger.debug(
+                "Scraper '%s' returned %d unit(s); %d unit(s) remain after filtering",
+                site.slug,
+                len(extracted_units),
+                len(filtered_units),
+            )
             site_results.append(
                 SiteProcessingResult(
                     site=site,
@@ -102,7 +113,7 @@ def collect_units_from_sites(
                 )
             )
         except Exception as exc:  # pragma: no cover - defensive logging branch
-            logging.debug("Error while processing site %s", site.slug, exc_info=True)
+            logger.exception("Error while processing site '%s'", site.slug)
             site_results.append(SiteProcessingResult(site=site, units=[], error=exc, total_extracted=0))
 
     return WorkflowResult(site_results)
