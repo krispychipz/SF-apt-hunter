@@ -6,21 +6,11 @@ import argparse
 import json
 import logging
 from pathlib import Path
-from typing import List, Optional
-
-try:  # pragma: no cover - optional dependency for runtime fetching
-    import requests  # type: ignore
-except ImportError:  # pragma: no cover
-    requests = None  # type: ignore
+from typing import List
 
 from .extract import extract_units
 from .sites import load_sites_yaml
 from .workflow import WorkflowResult, collect_units_from_sites, filter_units
-headers = {
-    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                  "Chrome/117.0.0.0 Safari/537.36"
-}
 
 def _configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
@@ -34,14 +24,6 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--sites-yaml", type=Path, help="Path to a YAML file containing site URLs")
     parser.add_argument("--pretty", action="store_true", help="Pretty-print JSON output")
     parser.add_argument("--debug", action="store_true", help="Enable verbose debug logging")
-    parser.add_argument(
-        "--download-dir",
-        type=Path,
-        help=(
-            "Optional directory where fetched HTML files should be written when "
-            "processing --sites-yaml"
-        ),
-    )
     parser.add_argument(
         "--min-bedrooms",
         type=float,
@@ -74,24 +56,12 @@ def main(argv: List[str] | None = None) -> int:
     if args.sites_yaml:
         sites = load_sites_yaml(args.sites_yaml)
 
-        download_dir: Optional[Path] = args.download_dir
-        if download_dir is not None:
-            download_dir.mkdir(parents=True, exist_ok=True)
-
-        session = requests.Session() if requests is not None else None
-        try:
-            result = collect_units_from_sites(
-                sites,
-                session=session,
-                headers=headers,
-                download_dir=download_dir,
-                min_bedrooms=args.min_bedrooms,
-                max_rent=args.max_rent,
-                neighborhoods=neighborhoods,
-            )
-        except RuntimeError as exc:
-            logging.error("%s", exc)
-            return 1
+        result = collect_units_from_sites(
+            sites,
+            min_bedrooms=args.min_bedrooms,
+            max_rent=args.max_rent,
+            neighborhoods=neighborhoods,
+        )
 
         for site_result in result.site_results:
             if site_result.error is None:
