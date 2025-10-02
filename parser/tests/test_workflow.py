@@ -1,5 +1,3 @@
-from pathlib import Path
-
 from parser.models import Site, Unit
 from parser.workflow import WorkflowResult, collect_units_from_sites, filter_units
 
@@ -33,7 +31,7 @@ def test_filter_units_applies_criteria():
     assert [unit.address for unit in filtered] == ["B"]
 
 
-def test_collect_units_from_sites_filters_and_deduplicates(tmp_path: Path, monkeypatch):
+def test_collect_units_from_sites_filters_and_deduplicates():
     sites = [
         Site(slug="site-a", url="https://example.com/a"),
         Site(slug="site-b", url="https://example.com/b"),
@@ -49,31 +47,35 @@ def test_collect_units_from_sites_filters_and_deduplicates(tmp_path: Path, monke
         ],
     }
 
-    def fake_fetch(site: Site):
-        html_path = tmp_path / f"{site.slug}.html"
-        html_path.write_text("<html></html>")
-        return "<html></html>", html_path
-
-    def fake_extract(html: str, url: str):
-        return units_by_url[url]
-
-    monkeypatch.setitem(collect_units_from_sites.__globals__, "extract_units", fake_extract)
+    scrapers = {
+        "site-a": lambda url: units_by_url[url],
+        "site-b": lambda url: units_by_url[url],
+    }
 
     result = collect_units_from_sites(
         sites,
         min_bedrooms=2,
         max_rent=3200,
         neighborhoods={"mission"},
-        fetch_html=fake_fetch,
+        scrapers=scrapers,
     )
 
     assert len(result.site_results) == 2
-    assert all(res.html_path is not None for res in result.site_results if res.error is None)
+    assert all(res.error is None for res in result.site_results)
 
     # One unit is filtered out for insufficient bedrooms, and duplicates are removed.
     aggregated = result.units
     assert len(aggregated) == 1
     assert aggregated[0].address == "111 Main"
+
+
+def test_collect_units_reports_missing_scraper():
+    sites = [Site(slug="unknown", url="https://example.com")]
+
+    result = collect_units_from_sites(sites, scrapers={})
+
+    assert len(result.errors) == 1
+    assert isinstance(result.errors[0].error, RuntimeError)
 
 
 def test_workflow_result_single_batch_wraps_units():

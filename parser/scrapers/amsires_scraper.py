@@ -1,13 +1,15 @@
-#!/usr/bin/env python3
+"""Scraper for AMS IRES rental listings."""
+
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
 from typing import List, Optional
-from urllib.parse import urljoin, urlparse
+from urllib.parse import urljoin
 
 import requests
 from bs4 import BeautifulSoup
+
+from parser.models import Unit
 
 SEARCH_URL = "https://www.amsires.com/unfurnished-rentals-search"
 
@@ -22,15 +24,6 @@ HEADERS = {
     "Connection": "keep-alive",
 }
 
-@dataclass
-class Unit:
-    """Representation of a single apartment unit listing."""
-    address: Optional[str]
-    bedrooms: Optional[float]
-    bathrooms: Optional[float]
-    rent: Optional[int]
-    neighborhood: Optional[str]
-    source_url: str
 
 def _clean_price(text: Optional[str]) -> Optional[int]:
     if not text:
@@ -54,11 +47,6 @@ def _clean_float(text: Optional[str]) -> Optional[float]:
         return float(m.group(0))
     except ValueError:
         return None
-
-def _get_html(url: str, timeout: int = 20) -> str:
-    resp = requests.get(url, headers=HEADERS, timeout=timeout)
-    resp.raise_for_status()
-    return resp.text
 
 def _extract_neighborhood(container: BeautifulSoup) -> Optional[str]:
     """Try a few common patterns for neighborhood labels on AppFolio/AMS IRES templates."""
@@ -111,21 +99,26 @@ def _parse_listing(div: BeautifulSoup, base_url: str) -> Optional[Unit]:
         source_url=source_url,
     )
 
-def parse() -> List[Unit]:
-    """
-    Fetches the AMSIRES unfurnished rentals search page and returns
-    a list of Unit objects with address, bedrooms, bathrooms, rent, neighborhood, and source_url.
 
-    This function currently parses only the first page — if the site adds pagination,
-    you can extend it by following '.pagination a' links and concatenating results.
-    """
-    html = _get_html(SEARCH_URL)
+def parse_listings(html: str, *, base_url: str) -> List[Unit]:
+    """Parse raw *html* from the AMS IRES listings page."""
+
     soup = BeautifulSoup(html, "lxml")
 
-    # Each listing is contained in .listing-item
     units: List[Unit] = []
     for div in soup.select("div.listing-item"):
-        unit = _parse_listing(div, base_url=SEARCH_URL)
+        unit = _parse_listing(div, base_url=base_url)
         if unit:
             units.append(unit)
     return units
+
+
+def fetch_units(url: str = SEARCH_URL, *, timeout: int = 20) -> List[Unit]:
+    """Fetch and parse AMS IRES listings from *url*."""
+
+    response = requests.get(url, headers=HEADERS, timeout=timeout)
+    response.raise_for_status()
+    return parse_listings(response.text, base_url=url)
+
+
+__all__ = ["fetch_units", "parse_listings"]

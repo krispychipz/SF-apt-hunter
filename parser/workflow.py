@@ -1,34 +1,22 @@
-"""High-level workflow helpers for fetching and extracting listings."""
+"""High-level workflow helpers for orchestrating scraper runs."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Callable, Iterable, List, Optional, Sequence, TYPE_CHECKING
+from typing import Dict, Iterable, List, Optional, Sequence
 
 import logging
 
-try:  # pragma: no cover - requests might be unavailable in some environments
-    import requests  # type: ignore
-except ImportError:  # pragma: no cover - handled gracefully at runtime
-    requests = None  # type: ignore
-
-if TYPE_CHECKING:  # pragma: no cover - typing helper only
-    import requests as _requests
-
-from .extract import extract_units
 from .models import Site, Unit
-
-FetchFunction = Callable[[Site], tuple[str, Optional[Path]]]
+from .scrapers import ScraperFunc, available_scrapers
 
 
 @dataclass(slots=True)
 class SiteProcessingResult:
-    """Encapsulates the outcome of fetching and extracting a single site."""
+    """Encapsulates the outcome of running a scraper for a single site."""
 
     site: Site
     units: List[Unit]
-    html_path: Optional[Path]
     error: Optional[Exception] = None
 
 
@@ -43,7 +31,7 @@ class WorkflowResult:
         """Create a result wrapper for ad-hoc unit lists (e.g., single HTML input)."""
 
         dummy_site = Site(slug="ad-hoc", url="")
-        result = SiteProcessingResult(dummy_site, list(units), html_path=None)
+        result = SiteProcessingResult(dummy_site, list(units), error=None)
         return cls([result])
 
     @property
@@ -73,46 +61,26 @@ class WorkflowResult:
 def collect_units_from_sites(
     sites: Sequence[Site],
     *,
-    session: Optional["_requests.Session"] = None,
-    headers: Optional[dict[str, str]] = None,
-    download_dir: Optional[Path] = None,
     min_bedrooms: Optional[float] = None,
     max_rent: Optional[int] = None,
     neighborhoods: Optional[set[str]] = None,
-    fetch_html: Optional[FetchFunction] = None,
+    scrapers: Optional[Dict[str, ScraperFunc]] = None,
 ) -> WorkflowResult:
-    """Fetch, extract, and filter units for every site in *sites*.
+    """Execute registered scrapers for each site in *sites* and apply filters."""
 
-    Parameters are designed so callers (including tests) can inject custom
-    networking behaviour by supplying *session* or *fetch_html*.
-    """
-
-    if fetch_html is None:
-        if requests is None:  # pragma: no cover - dependency not installed
-            raise RuntimeError(
-                "The 'requests' library is required to download site HTML. "
-                "Install requests or supply a custom fetch_html callable."
-            )
-
-        http_session = session or requests.Session()
-
-        def _fetch(site: Site) -> tuple[str, Optional[Path]]:
-            return _download_site_html(
-                http_session,
-                site,
-                headers=headers,
-                download_dir=download_dir,
-            )
-
-        fetch_html = _fetch
-
+    registry = _prepare_registry(scrapers)
     site_results: List[SiteProcessingResult] = []
 
     for site in sites:
-        html_path: Optional[Path] = None
+        key = _normalise_slug(site.slug)
+        scraper = registry.get(key)
+        if scraper is None:
+            error = RuntimeError(f"No scraper registered for site slug '{site.slug}'")
+            site_results.append(SiteProcessingResult(site=site, units=[], error=error))
+            continue
+
         try:
-            html_text, html_path = fetch_html(site)
-            units = extract_units(html_text, site.url)
+            units = scraper(site.url)
             filtered_units = filter_units(
                 units,
                 min_bedrooms=min_bedrooms,
@@ -120,18 +88,11 @@ def collect_units_from_sites(
                 neighborhoods=neighborhoods,
             )
             site_results.append(
-                SiteProcessingResult(
-                    site=site,
-                    units=filtered_units,
-                    html_path=html_path,
-                    error=None,
-                )
+                SiteProcessingResult(site=site, units=filtered_units, error=None)
             )
         except Exception as exc:  # pragma: no cover - defensive logging branch
             logging.debug("Error while processing site %s", site.slug, exc_info=True)
-            site_results.append(
-                SiteProcessingResult(site=site, units=[], html_path=html_path, error=exc)
-            )
+            site_results.append(SiteProcessingResult(site=site, units=[], error=exc))
 
     return WorkflowResult(site_results)
 
@@ -173,27 +134,15 @@ def filter_units(
     return filtered
 
 
-def _download_site_html(
-    session: "_requests.Session",
-    site: Site,
-    *,
-    headers: Optional[dict[str, str]] = None,
-    download_dir: Optional[Path] = None,
-    timeout: float = 20.0,
-) -> tuple[str, Optional[Path]]:
-    """Download the HTML for *site* and optionally persist it to *download_dir*."""
+def _prepare_registry(
+    scrapers: Optional[Dict[str, ScraperFunc]] = None,
+) -> Dict[str, ScraperFunc]:
+    registry = scrapers or available_scrapers()
+    return {_normalise_slug(slug): scraper for slug, scraper in registry.items()}
 
-    response = session.get(site.url, headers=headers, timeout=timeout)
-    response.raise_for_status()
-    html_text = response.text
-    html_path: Optional[Path] = None
 
-    if download_dir is not None:
-        download_dir.mkdir(parents=True, exist_ok=True)
-        html_path = download_dir / f"{site.slug}.html"
-        html_path.write_text(html_text, encoding="utf-8")
-
-    return html_text, html_path
+def _normalise_slug(slug: str) -> str:
+    return slug.strip().lower().replace(" ", "-")
 
 
 __all__ = [
@@ -202,4 +151,3 @@ __all__ = [
     "collect_units_from_sites",
     "filter_units",
 ]
-
