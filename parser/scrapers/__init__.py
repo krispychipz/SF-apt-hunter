@@ -21,6 +21,13 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         registry["amsires"] = amsires_fetch
 
     try:
+        from .anchorealty_scraper import fetch_units as anchorealty_fetch
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+        missing.append(getattr(exc, "name", "anchorealty_scraper dependency"))
+    else:
+        registry["anchorealty"] = anchorealty_fetch
+
+    try:
         from .relisto_scraper import fetch_units as relisto_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
         missing.append(getattr(exc, "name", "relisto_scraper dependency"))
