@@ -80,7 +80,10 @@ def collect_units_from_sites(
             continue
 
         try:
-            units = scraper(site.url)
+            if site.url:
+                units = scraper(site.url)
+            else:
+                units = scraper()
             filtered_units = filter_units(
                 units,
                 min_bedrooms=min_bedrooms,

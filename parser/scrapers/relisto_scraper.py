@@ -149,4 +149,7 @@ def fetch_units(
     return all_units
 
 
+fetch_units.default_url = BASE_URL  # type: ignore[attr-defined]
+
+
 __all__ = ["fetch_units", "parse_listings", "set_page_number"]

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Callable, Dict, List
 
-from parser.models import Unit
+from parser.models import Site, Unit
 
 ScraperFunc = Callable[[str], List[Unit]]
 
@@ -42,4 +42,15 @@ def available_scrapers() -> Dict[str, ScraperFunc]:
     return _load_default_scrapers().copy()
 
 
-__all__ = ["ScraperFunc", "available_scrapers"]
+def available_sites() -> List[Site]:
+    """Return :class:`Site` definitions inferred from bundled scrapers."""
+
+    registry = _load_default_scrapers()
+    sites: List[Site] = []
+    for slug, scraper in registry.items():
+        default_url = getattr(scraper, "default_url", "")
+        sites.append(Site(slug=slug, url=default_url))
+    return sites
+
+
+__all__ = ["ScraperFunc", "available_scrapers", "available_sites"]

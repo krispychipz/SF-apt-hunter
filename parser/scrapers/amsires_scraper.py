@@ -121,4 +121,7 @@ def fetch_units(url: str = SEARCH_URL, *, timeout: int = 20) -> List[Unit]:
     return parse_listings(response.text, base_url=url)
 
 
+fetch_units.default_url = SEARCH_URL  # type: ignore[attr-defined]
+
+
 __all__ = ["fetch_units", "parse_listings"]
