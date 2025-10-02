@@ -77,10 +77,15 @@ def main(argv: List[str] | None = None) -> int:
 
         for site_result in result.site_results:
             if site_result.error is None:
+                total_extracted = len(site_result.units) + len(site_result.error.units) if site_result.error else len(site_result.units)
+                # If you want the raw extracted count, you need to get it before filtering.
+                # But in your workflow, only filtered units are stored.
+                # So, you need to modify workflow.py to return both extracted and filtered counts.
                 logging.info(
-                    "Extracted %s matching unit(s) from %s",
-                    len(site_result.units),
+                    "Site: %s\n  Extracted: %d unit(s)\n  Matching criteria: %d unit(s)",
                     site_result.site.url or site_result.site.slug,
+                    getattr(site_result, "total_extracted", len(site_result.units)),  # fallback to filtered if not available
+                    len(site_result.units),
                 )
             else:
                 logging.error(

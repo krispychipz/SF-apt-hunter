@@ -40,6 +40,13 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         missing.append(getattr(exc, "name", "chandlerproperties_scraper dependency"))
     else:
         registry["chandlerproperties"] = chandler_fetch
+    
+    try:
+        from .structure_scraper import fetch_units as structure_fetch
+    except ModuleNotFoundError as exc:
+        missing.append(getattr(exc, "name", "structure_scraper dependency"))
+    else:
+        registry["structure"] = structure_fetch
 
     if not registry and missing:
         details = ", ".join(sorted(set(filter(None, missing))))
@@ -63,6 +70,10 @@ def available_sites() -> List[Site]:
     sites: List[Site] = []
     for slug, scraper in registry.items():
         default_url = getattr(scraper, "default_url", "")
+        if default_url == "":  
+            raise RuntimeError(
+                f"Scraper for site '{slug}' is missing a 'default_url' attribute"
+            )
         sites.append(Site(slug=slug, url=default_url))
     return sites
 

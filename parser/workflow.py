@@ -16,8 +16,9 @@ class SiteProcessingResult:
     """Encapsulates the outcome of running a scraper for a single site."""
 
     site: Site
-    units: List[Unit]
+    units: List[Unit]  # filtered units
     error: Optional[Exception] = None
+    total_extracted: int = 0  # add this field
 
 
 @dataclass(slots=True)
@@ -69,6 +70,8 @@ def collect_units_from_sites(
     """Execute registered scrapers for each site in *sites* and apply filters."""
 
     registry = _prepare_registry(scrapers)
+    #print("Registered scrapers:", registry.keys())
+    #print("Sites to process:", [site.slug for site in sites])
     site_results: List[SiteProcessingResult] = []
 
     for site in sites:
@@ -81,21 +84,26 @@ def collect_units_from_sites(
 
         try:
             if site.url:
-                units = scraper(site.url)
+                extracted_units = scraper(site.url)
             else:
-                units = scraper()
+                extracted_units = scraper()
             filtered_units = filter_units(
-                units,
+                extracted_units,
                 min_bedrooms=min_bedrooms,
                 max_rent=max_rent,
                 neighborhoods=neighborhoods,
             )
             site_results.append(
-                SiteProcessingResult(site=site, units=filtered_units, error=None)
+                SiteProcessingResult(
+                    site=site,
+                    units=filtered_units,
+                    error=None,
+                    total_extracted=len(extracted_units),
+                )
             )
         except Exception as exc:  # pragma: no cover - defensive logging branch
             logging.debug("Error while processing site %s", site.slug, exc_info=True)
-            site_results.append(SiteProcessingResult(site=site, units=[], error=exc))
+            site_results.append(SiteProcessingResult(site=site, units=[], error=exc, total_extracted=0))
 
     return WorkflowResult(site_results)
 
