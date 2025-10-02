@@ -5,29 +5,19 @@ from parser.scrapers.anchorealty_scraper import LISTINGS_URL, parse_listings
 
 def test_parse_listings_extracts_core_fields():
     html = """
-    <div class="listing-item" id="listing_514">
-        <div class="listing-item__figure-container">
-            <a href="/listings/detail/fc8f831b-268d-4da3-99ba-a669670d39b7">
-                <div class="listing-item__figure">
-                    <div class="listing-item__blurb">
-                        <div class="rent-banner__text js-listing-blurb-rent">$2,595</div>
-                        <span class="rent-banner__text js-listing-blurb-bed-bath">Studio / 1 ba</span>
-                    </div>
-                </div>
-            </a>
-        </div>
-        <div class="listing-item__body">
-            <h2 class="listing-item__title">
-                <a href="/listings/detail/fc8f831b-268d-4da3-99ba-a669670d39b7">
-                    Renovated Nob Hill Studio with In Unit Laundry!
-                </a>
-            </h2>
-            <p>
-                <span class="u-pad-rm js-listing-address">
+    <div class="listing-card" data-testid="listing-card">
+        <a class="listing-card__link" href="/listings/detail/fc8f831b-268d-4da3-99ba-a669670d39b7">
+            <div class="listing-card__header">
+                <h3 class="listing-card__title">Renovated Nob Hill Studio with In Unit Laundry!</h3>
+                <div class="listing-card__address" data-testid="listing-card-address">
                     1684 Washington Street #2, San Francisco, CA 94109
-                </span>
-            </p>
-        </div>
+                </div>
+            </div>
+            <div class="listing-card__rent" data-testid="listing-card-rent">$2,595 / month</div>
+            <div class="listing-card__details">
+                <span data-testid="listing-card-bed-bath">Studio / 1 ba</span>
+            </div>
+        </a>
     </div>
     """
 
@@ -40,7 +30,7 @@ def test_parse_listings_extracts_core_fields():
     assert unit.bedrooms == 0
     assert unit.bathrooms == 1
     assert unit.source_url == (
-        "https://anchorealtyinc.com/listings/detail/"
+        "https://anchorrlty.appfolio.com/listings/detail/"
         "fc8f831b-268d-4da3-99ba-a669670d39b7"
     )
 
@@ -48,12 +38,10 @@ def test_parse_listings_extracts_core_fields():
 def test_parse_listings_handles_missing_values():
     html = """
     <div>
-        <div class="listing-item">
-            <div class="listing-item__body">
-                <span class="js-listing-address">1200 Pine St</span>
-            </div>
+        <div class="listing-card" data-testid="listing-card" data-address="1200 Pine St">
+            <div class="listing-card__details"></div>
         </div>
-        <div class="listing-item">
+        <div class="listing-card">
             <a href="/listings/detail/abc"></a>
         </div>
     </div>
@@ -69,4 +57,4 @@ def test_parse_listings_handles_missing_values():
     assert first.bathrooms is None
 
     assert second.address is None
-    assert second.source_url == "https://anchorealtyinc.com/listings/detail/abc"
+    assert second.source_url == "https://anchorrlty.appfolio.com/listings/detail/abc"
