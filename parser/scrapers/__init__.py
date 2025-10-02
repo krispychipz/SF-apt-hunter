@@ -27,6 +27,13 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
     else:
         registry["relisto"] = relisto_fetch
 
+    try:
+        from .chandlerproperties_scraper import fetch_units as chandler_fetch
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+        missing.append(getattr(exc, "name", "chandlerproperties_scraper dependency"))
+    else:
+        registry["chandlerproperties"] = chandler_fetch
+
     if not registry and missing:
         details = ", ".join(sorted(set(filter(None, missing))))
         raise RuntimeError(
