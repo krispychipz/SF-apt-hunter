@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import re
 import time
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
@@ -43,6 +43,18 @@ HEADERS = {
     "sec-ch-ua": '"Not.A/Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
     "sec-ch-ua-mobile": "?0",
     "sec-ch-ua-platform": '"Windows"',
+}
+
+MINIMAL_HEADERS = {
+    "User-Agent": HEADERS["User-Agent"],
+    "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+    "Accept-Language": HEADERS["Accept-Language"],
+    "Connection": HEADERS["Connection"],
+}
+
+HEADER_PROFILES = {
+    "full": HEADERS,
+    "minimal": MINIMAL_HEADERS,
 }
 
 LANDING_URL = "https://properties.rentbt.com/"
@@ -94,10 +106,17 @@ def _clean_rent(value: Optional[str]) -> Optional[int]:
         return None
 
 
-def _set_headers(session: Any) -> None:
+def _resolve_headers(profile: str = "full", overrides: Optional[Dict[str, str]] = None) -> Dict[str, str]:
+    headers = HEADER_PROFILES.get(profile, HEADERS).copy()
+    if overrides:
+        headers.update({k: v for k, v in overrides.items() if v})
+    return headers
+
+
+def _set_headers(session: Any, headers: Dict[str, str]) -> None:
     if hasattr(session, "headers"):
         try:
-            session.headers.update(HEADERS)
+            session.headers.update(headers)
         except Exception:  # pragma: no cover - defensive
             pass
 
@@ -113,6 +132,31 @@ def set_page_number(url: str, page: int) -> str:
     return urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
     )
+
+
+def _cookie_snapshot(source: Any) -> Dict[str, str]:
+    if not source:
+        return {}
+    try:
+        return dict(source)
+    except TypeError:  # pragma: no cover - defensive
+        try:
+            return requests.utils.dict_from_cookiejar(source)  # type: ignore[attr-defined]
+        except Exception:  # pragma: no cover - defensive
+            return {}
+
+
+def _emit_debug(
+    hook: Optional[Callable[[str, Dict[str, Any]], None]],
+    phase: str,
+    payload: Dict[str, Any],
+) -> None:
+    if not hook:
+        return
+    try:
+        hook(phase, payload)
+    except Exception:  # pragma: no cover - defensive
+        pass
 
 
 def _merge_query_params(url: str, params: Dict[str, str]) -> str:
@@ -135,14 +179,21 @@ def _merge_query_params(url: str, params: Dict[str, str]) -> str:
     )
 
 
-def _get_page(url: str, *, client: Any, timeout: int = 20, referer: Optional[str] = None) -> str:
-    headers = HEADERS.copy()
+def _get_page(
+    url: str,
+    *,
+    client: Any,
+    timeout: int = 20,
+    referer: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None,
+) -> str:
+    request_headers = (headers or HEADERS).copy()
     if referer:
-        headers["Referer"] = referer
+        request_headers["Referer"] = referer
     if httpx is not None and isinstance(client, httpx.Client):  # type: ignore[arg-type]
-        response = client.get(url, headers=headers, timeout=httpx.Timeout(timeout))
+        response = client.get(url, headers=request_headers, timeout=httpx.Timeout(timeout))
     else:
-        response = client.get(url, headers=headers, timeout=timeout)
+        response = client.get(url, headers=request_headers, timeout=timeout)
     response.raise_for_status()
     if hasattr(response, "cookies") and hasattr(client, "cookies"):
         client.cookies.update(response.cookies)  # type: ignore[attr-defined]
@@ -277,12 +328,19 @@ def parse_search_form_tokens(html: str) -> Dict[str, str]:
     return tokens
 
 
-def _load_search_form_tokens(*, client: Any, timeout: int = 20, referer: Optional[str] = None) -> Dict[str, str]:
+def _load_search_form_tokens(
+    *,
+    client: Any,
+    timeout: int = 20,
+    referer: Optional[str] = None,
+    headers: Optional[Dict[str, str]] = None,
+) -> Dict[str, str]:
     html = _get_page(
         SEARCH_FORM_URL,
         client=client,
         timeout=timeout,
         referer=referer,
+        headers=headers,
     )
     return parse_search_form_tokens(html)
 
@@ -294,44 +352,81 @@ def fetch_units(
     delay: float = 1.0,
     session: Optional[Any] = None,
     timeout: int = 20,
+    debug: Optional[Callable[[str, Dict[str, Any]], None]] = None,
+    header_profile: str = "full",
+    header_overrides: Optional[Dict[str, str]] = None,
 ) -> List[Unit]:
+    headers = _resolve_headers(header_profile, header_overrides)
     if session is not None:
         http_session = session
         close_session = lambda: None
-        _set_headers(http_session)
+        _set_headers(http_session, headers)
     else:
         if httpx is not None:
             http_session = httpx.Client(
                 http2=True,
                 follow_redirects=True,
-                headers=HEADERS,
+                headers=headers,
                 timeout=httpx.Timeout(timeout),
             )
             close_session = http_session.close
         else:  # pragma: no cover - fallback without httpx
             http_session = requests.Session()
-            _set_headers(http_session)
+            _set_headers(http_session, headers)
             close_session = http_session.close
 
     all_units: List[Unit] = []
 
     try:
+        _emit_debug(
+            debug,
+            "session_headers",
+            {
+                "profile": header_profile,
+                "headers": headers.copy(),
+            },
+        )
+
         try:  # warm-up request for cookies/session state
-            _get_page(LANDING_URL, client=http_session, timeout=timeout)
+            _get_page(
+                LANDING_URL,
+                client=http_session,
+                timeout=timeout,
+                headers=headers,
+            )
         except Exception:
             pass
+        else:
+            _emit_debug(
+                debug,
+                "warmup",
+                {
+                    "url": LANDING_URL,
+                    "cookies": _cookie_snapshot(getattr(http_session, "cookies", None)),
+                },
+            )
 
         try:
             tokens = _load_search_form_tokens(
                 client=http_session,
                 timeout=timeout,
                 referer=LANDING_URL,
+                headers=headers,
             )
         except Exception:
             tokens = {}
 
         url = _merge_query_params(url, tokens)
         referer: Optional[str] = SEARCH_FORM_URL if tokens else LANDING_URL
+
+        _emit_debug(
+            debug,
+            "tokens",
+            {
+                "tokens": tokens.copy(),
+                "merged_url": url,
+            },
+        )
 
         for page in range(1, max(1, pages) + 1):
             page_url = set_page_number(url, page)
@@ -340,11 +435,22 @@ def fetch_units(
                 client=http_session,
                 timeout=timeout,
                 referer=referer,
+                headers=headers,
             )
             units = parse_listings(html, base_url=url)
             if not units and page > 1:
                 break
             all_units.extend(units)
+            _emit_debug(
+                debug,
+                "page",
+                {
+                    "page": page,
+                    "url": page_url,
+                    "unit_count": len(units),
+                    "cookies": _cookie_snapshot(getattr(http_session, "cookies", None)),
+                },
+            )
             if delay:
                 time.sleep(delay)
             referer = page_url
