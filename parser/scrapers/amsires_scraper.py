@@ -407,117 +407,75 @@ def _extract_values_entries(data: Any) -> Iterable[Dict[str, Any]]:
             yield from _extract_values_entries(item)
 
 
+def _fetch_api_units(
+    *,
+    page_size: int = 100,
+    max_pages: int = 10,
+    language: str = "ENGLISH",
+    timeout: int = 20,
+    session: Optional[requests.Session] = None,
+    base_url: str = SEARCH_URL,
+) -> List[Unit]:
+    http = session or requests.Session()
+    http.headers.update(HEADERS)
 
+    all_units: List[Unit] = []
+    seen: set[tuple[Optional[str], str]] = set()
 
-def _extract_items(data: Any) -> Optional[List[Any]]:
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        for key in ("items", "results", "values"):
-            value = data.get(key)
-            if isinstance(value, list):
-                return value
-        nested = data.get("data")
-        if nested is not None:
-            return _extract_items(nested)
-    return None
+    for page_number in range(max_pages):
+        page_param = json.dumps({"pageSize": page_size, "pageNumber": page_number}, separators=(",", ":"))
+        params = {"page": page_param, "language": language}
+        resp = http.get(API_URL, params=params, timeout=timeout)
+        logger.debug(
+            "AMS IRES API page %d HTTP %s (%d bytes)",
+            page_number,
+            resp.status_code,
+            len(resp.content or b"") if hasattr(resp, "content") else 0,
+        )
+        resp.raise_for_status()
+        try:
+            data = resp.json()
+        except Exception as exc:  # pragma: no cover - defensive
+            logger.debug("AMS IRES API JSON decode error: %s", exc, exc_info=True)
+            break
 
+        page_units = parse_appfolio_json(data, base_url=base_url)
+        logger.debug("AMS IRES API page %d yielded %d unit(s)", page_number, len(page_units))
+        if not page_units:
+            # Stop when no more items are returned
+            break
 
-def _html_unit_from_card(card: BeautifulSoup, base_url: str) -> Optional[Unit]:
-    # Source URL from the photo link
-    a = card.select_one(".photo a.slider-link[href]")
-    href = a.get("href") if a else None
-    source_url = urljoin(base_url, href) if href else base_url
+        for u in page_units:
+            key = (u.address, u.source_url)
+            if key in seen:
+                continue
+            seen.add(key)
+            all_units.append(u)
 
-    # Address: prefer explicit address node, then aria-label, then slug fallback
-    addr = None
-    addr_el = card.select_one(".photo h2.address")
-    if addr_el:
-        addr = addr_el.get_text(strip=True)
-    if not addr and a and a.get("aria-label"):
-        addr = a["aria-label"].strip()
-    if not addr and href:
-        m = re.search(r"/listings/detail/([^/?#]+)", href)
-        if m:
-            addr = m.group(1).replace("-", " ").strip().title()
-
-    # Rent: <h3 class="rent"><div class="smaller">RENT</div>$7,200</h3>
-    rent_el = card.select_one("h3.rent")
-    rent = _clean_price(rent_el.get_text(" ", strip=True) if rent_el else None)
-
-    # Beds: <div class="amenities"><div class="feature beds">3 beds</div>...</div>
-    beds = None
-    beds_el = card.select_one(".amenities .feature.beds")
-    if beds_el:
-        m = _number_re.search(beds_el.get_text(" ", strip=True))
-        if m:
-            try:
-                beds = float(m.group(1))
-            except ValueError:
-                beds = None
-
-    # Baths: <div class="feature baths">1.5 baths</div>
-    baths = None
-    baths_el = card.select_one(".amenities .feature.baths")
-    if baths_el:
-        m = _number_re.search(baths_el.get_text(" ", strip=True))
-        if m:
-            try:
-                baths = float(m.group(1))
-            except ValueError:
-                baths = None
-
-    if not addr and not source_url:
-        return None
-
-    return Unit(
-        address=addr,
-        bedrooms=beds,
-        bathrooms=baths,
-        rent=rent,
-        neighborhood=None,
-        source_url=source_url,
-    )
-
-
-def parse_listings(html: str, *, base_url: str) -> List[Unit]:
-    """Parse AMS IRES HTML search results into Unit objects from div.listing-item cards only."""
-    soup = BeautifulSoup(html, "lxml")
-
-    # Only consider explicit listing-item cards
-    cards: List[BeautifulSoup] = list(soup.select("div.listing-item"))
-
-    units: List[Unit] = []
-    for card in cards:
-        u = _html_unit_from_card(card, base_url)
-        if u:
-            units.append(u)
-    return units
+    return all_units
 
 
 def fetch_units(
     url: str = SEARCH_URL,
     *,
     timeout: int = 20,
-    # ...existing parameters retained for compatibility but unused in HTML mode...
     page_size: int = 100,
     max_pages: int = 10,
     language: str = "ENGLISH",
 ) -> List[Unit]:
-    """Fetch AMS IRES listings by requesting the HTML page and parsing div.listing-item cards."""
+    """Fetch AMS IRES listings using the public AppFolio JSON API endpoint (paginated)."""
 
-    session = requests.Session()
-    session.headers.update(HEADERS)
-
-    response = session.get(url or SEARCH_URL, timeout=timeout)
-    response.raise_for_status()
-    html_text = response.text
-
-    units = parse_listings(html_text, base_url=url or SEARCH_URL)
+    units = _fetch_api_units(
+        page_size=page_size,
+        max_pages=max_pages,
+        language=language,
+        timeout=timeout,
+        base_url=url or SEARCH_URL,
+    )
     return units
 
 
 fetch_units.default_url = SEARCH_URL  # type: ignore[attr-defined]
 
 
-__all__ = ["fetch_units", "parse_appfolio_json", "parse_listings"]
+__all__ = ["fetch_units", "parse_appfolio_json"]
