@@ -12,7 +12,7 @@ ScraperFunc = Callable[[str], List[Unit]]
 def _load_default_scrapers() -> Dict[str, ScraperFunc]:
     registry: Dict[str, ScraperFunc] = {}
     missing: List[str] = []
-
+    '''
     try:
         from .amsires_scraper import fetch_units as amsires_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
@@ -40,21 +40,21 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         missing.append(getattr(exc, "name", "chandlerproperties_scraper dependency"))
     else:
         registry["chandlerproperties"] = chandler_fetch
-    
+    '''
     try:
         from .structure_scraper import fetch_units as structure_fetch
     except ModuleNotFoundError as exc:
         missing.append(getattr(exc, "name", "structure_scraper dependency"))
     else:
         registry["structure"] = structure_fetch
-
+    '''
     try:
         from .rentbt_scraper import fetch_units as rentbt_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
         missing.append(getattr(exc, "name", "rentbt_scraper dependency"))
     else:
         registry["rentbt"] = rentbt_fetch
-
+    '''
     if not registry and missing:
         details = ", ".join(sorted(set(filter(None, missing))))
         raise RuntimeError(
