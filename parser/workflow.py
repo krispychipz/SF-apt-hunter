@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Dict, Iterable, List, Optional, Sequence
 
 import logging
+import re
 
 from .models import Site, Unit
 from .scrapers import ScraperFunc, available_scrapers
@@ -68,6 +69,7 @@ def collect_units_from_sites(
     min_bedrooms: Optional[float] = None,
     max_rent: Optional[int] = None,
     neighborhoods: Optional[set[str]] = None,
+    zip_codes: Optional[set[str]] = None,
     scrapers: Optional[Dict[str, ScraperFunc]] = None,
 ) -> WorkflowResult:
     """Execute registered scrapers for each site in *sites* and apply filters."""
@@ -97,6 +99,7 @@ def collect_units_from_sites(
                 min_bedrooms=min_bedrooms,
                 max_rent=max_rent,
                 neighborhoods=neighborhoods,
+                zip_codes=zip_codes,
             )
             logger.debug(
                 "Scraper '%s' returned %d unit(s); %d unit(s) remain after filtering",
@@ -125,12 +128,18 @@ def filter_units(
     min_bedrooms: Optional[float] = None,
     max_rent: Optional[int] = None,
     neighborhoods: Optional[set[str]] = None,
+    zip_codes: Optional[set[str]] = None,
 ) -> List[Unit]:
     """Filter *units* according to user-provided criteria."""
 
     normalized_neighborhoods = (
         {name.strip().lower() for name in neighborhoods if name.strip()}
         if neighborhoods
+        else None
+    )
+    normalized_zip_codes = (
+        _normalise_zip_codes(zip_codes)
+        if zip_codes
         else None
     )
 
@@ -149,6 +158,11 @@ def filter_units(
                 unit.neighborhood is None
                 or unit.neighborhood.strip().lower() not in normalized_neighborhoods
             ):
+                continue
+
+        if normalized_zip_codes:
+            address_zips = _extract_zip_codes(unit.address or "")
+            if not address_zips or address_zips.isdisjoint(normalized_zip_codes):
                 continue
 
         filtered.append(unit)
@@ -176,3 +190,32 @@ __all__ = [
     "collect_units_from_sites",
     "filter_units",
 ]
+
+
+_ZIP_CODE_PATTERN = re.compile(r"\b(\d{5})(?:-(\d{4}))?\b")
+
+
+def _extract_zip_codes(text: str) -> set[str]:
+    matches: set[str] = set()
+    for match in _ZIP_CODE_PATTERN.finditer(text):
+        base = match.group(1)
+        extension = match.group(2)
+        matches.add(base)
+        if extension:
+            matches.add(f"{base}-{extension}")
+    return matches
+
+
+def _normalise_zip_codes(zip_codes: set[str]) -> set[str]:
+    normalized: set[str] = set()
+    for value in zip_codes:
+        if not value:
+            continue
+        extracted = _extract_zip_codes(value)
+        if extracted:
+            normalized.update(extracted)
+        else:
+            cleaned = value.strip()
+            if cleaned:
+                normalized.add(cleaned)
+    return normalized

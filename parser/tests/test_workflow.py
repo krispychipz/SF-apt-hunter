@@ -31,6 +31,42 @@ def test_filter_units_applies_criteria():
     assert [unit.address for unit in filtered] == ["B"]
 
 
+def test_filter_units_filters_by_zip_code():
+    units = [
+        make_unit(
+            "111 Main St, San Francisco, CA 94110",
+            2,
+            1,
+            3200,
+            "Mission",
+            "http://example.com/1",
+        ),
+        make_unit(
+            "222 Pine St, San Francisco, CA 94109",
+            2,
+            1,
+            3200,
+            "Nob Hill",
+            "http://example.com/2",
+        ),
+        make_unit(
+            "333 Oak St, San Francisco, CA",
+            2,
+            1,
+            3200,
+            "Hayes Valley",
+            "http://example.com/3",
+        ),
+    ]
+
+    filtered = filter_units(units, zip_codes={"94110", "94109"})
+
+    assert [unit.address for unit in filtered] == [
+        "111 Main St, San Francisco, CA 94110",
+        "222 Pine St, San Francisco, CA 94109",
+    ]
+
+
 def test_collect_units_from_sites_filters_and_deduplicates():
     sites = [
         Site(slug="site-a", url="https://example.com/a"),
@@ -67,6 +103,42 @@ def test_collect_units_from_sites_filters_and_deduplicates():
     aggregated = result.units
     assert len(aggregated) == 1
     assert aggregated[0].address == "111 Main"
+
+
+def test_collect_units_from_sites_filters_by_zip_code():
+    sites = [Site(slug="site-a", url="https://example.com/a")]
+
+    units_by_url = {
+        "https://example.com/a": [
+            make_unit(
+                "111 Main St, San Francisco, CA 94110",
+                2,
+                1,
+                3100,
+                "Mission",
+                "https://example.com/a",
+            ),
+            make_unit(
+                "222 Pine St, San Francisco, CA 94109",
+                2,
+                1,
+                3100,
+                "Nob Hill",
+                "https://example.com/a",
+            ),
+        ]
+    }
+
+    scrapers = {"site-a": lambda url: units_by_url[url]}
+
+    result = collect_units_from_sites(
+        sites,
+        zip_codes={"94110"},
+        scrapers=scrapers,
+    )
+
+    assert len(result.units) == 1
+    assert result.units[0].address == "111 Main St, San Francisco, CA 94110"
 
 
 def test_collect_units_reports_missing_scraper():
