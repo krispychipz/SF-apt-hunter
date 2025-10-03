@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import re
 import time
-from typing import Any, List, Optional
+from typing import Any, Dict, List, Optional
+
+from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
 
 import requests
 from bs4 import BeautifulSoup
@@ -36,6 +39,7 @@ HEADERS = {
 }
 
 LANDING_URL = "https://properties.rentbt.com/"
+SEARCH_FORM_URL = requests.compat.urljoin(LANDING_URL, "searchlisting.aspx")
 
 
 def _clean_rent(value: Optional[str]) -> Optional[int]:
@@ -51,8 +55,6 @@ def _clean_rent(value: Optional[str]) -> Optional[int]:
 
 
 def set_page_number(url: str, page: int) -> str:
-    from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
-
     parsed = urlparse(url)
     query = parse_qs(parsed.query, keep_blank_values=True)
     if page <= 1:
@@ -87,6 +89,100 @@ def _get_page(
         client.cookies.update(response.cookies)
 
     return response.text
+
+
+def _merge_query_params(url: str, params: Dict[str, str]) -> str:
+    if not params:
+        return url
+
+    parsed = urlparse(url)
+    query = parse_qs(parsed.query, keep_blank_values=True)
+    updated = False
+
+    for key, value in params.items():
+        if not value:
+            continue
+        if query.get(key) != [value]:
+            query[key] = [value]
+            updated = True
+
+    if not updated:
+        return url
+
+    new_query = urlencode(query, doseq=True)
+    return urlunparse(
+        (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
+    )
+
+
+_SCRIPT_ASSIGNMENT_PATTERNS = (
+    (
+        re.compile(
+            r"getElementById\(['\"](?P<name>[^'\"]+)['\"]\)\.value\s*=\s*['\"](?P<value>[^'\"]+)['\"]",
+            re.IGNORECASE,
+        ),
+        True,
+    ),
+    (
+        re.compile(
+            r"\$\(['\"][#.]?(?P<name>[^'\"]+)['\"]\)\.val\(['\"](?P<value>[^'\"]+)['\"]\)",
+            re.IGNORECASE,
+        ),
+        True,
+    ),
+    (
+        re.compile(
+            r"\b(?P<name>ftst)\b\s*[:=]\s*['\"](?P<value>[^'\"]+)['\"]",
+            re.IGNORECASE,
+        ),
+        False,
+    ),
+)
+
+
+def parse_search_form_tokens(html: str) -> Dict[str, str]:
+    soup = BeautifulSoup(html, "lxml")
+    tokens: Dict[str, str] = {}
+
+    for element in soup.select("input[type='hidden'][name]"):
+        name = element.get("name")
+        if not name:
+            continue
+        value = element.get("value")
+        if value:
+            tokens[name] = value
+
+    script_texts: List[str] = []
+    for script in soup.find_all("script"):
+        text = script.string or script.get_text()
+        if text:
+            script_texts.append(text)
+
+    if script_texts:
+        text = "\n".join(script_texts)
+        for pattern, allow_override in _SCRIPT_ASSIGNMENT_PATTERNS:
+            for match in pattern.finditer(text):
+                name = match.group("name")
+                value = match.group("value")
+                if not name or not value:
+                    continue
+                if name.startswith("#") or name.startswith("."):
+                    name = name[1:]
+                if tokens.get(name) and not allow_override:
+                    continue
+                tokens[name] = value
+
+    return tokens
+
+
+def _load_search_form_tokens(*, client: Any, timeout: int = 20, referer: Optional[str] = None) -> Dict[str, str]:
+    html = _get_page(
+        SEARCH_FORM_URL,
+        client=client,
+        timeout=timeout,
+        referer=referer,
+    )
+    return parse_search_form_tokens(html)
 
 
 def _parse_address(listing: BeautifulSoup) -> Optional[str]:
@@ -226,7 +322,19 @@ def fetch_units(
             # Ignore warm-up failures; the main requests will raise if necessary.
             pass
 
-        referer: Optional[str] = LANDING_URL
+        tokens: Dict[str, str] = {}
+        try:
+            tokens = _load_search_form_tokens(
+                client=http_session,
+                timeout=timeout,
+                referer=LANDING_URL,
+            )
+        except Exception:
+            tokens = {}
+
+        url = _merge_query_params(url, tokens)
+
+        referer: Optional[str] = SEARCH_FORM_URL if tokens else LANDING_URL
 
         for page in range(1, max(1, pages) + 1):
             page_url = set_page_number(url, page)
@@ -255,4 +363,4 @@ def fetch_units(
 fetch_units.default_url = BASE_URL  # type: ignore[attr-defined]
 
 
-__all__ = ["fetch_units", "parse_listings", "set_page_number"]
+__all__ = ["fetch_units", "parse_listings", "parse_search_form_tokens", "set_page_number"]
