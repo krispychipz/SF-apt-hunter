@@ -4,7 +4,11 @@ from __future__ import annotations
 
 import textwrap
 
-from parser.scrapers.rentbt_scraper import parse_listings, set_page_number
+from parser.scrapers.rentbt_scraper import (
+    parse_listings,
+    parse_search_form_tokens,
+    set_page_number,
+)
 
 
 def test_parse_listings_extracts_key_fields():
@@ -55,3 +59,28 @@ def test_set_page_number_updates_querystring():
     assert "PgNo=2" in second
     first = set_page_number(second, 1)
     assert "PgNo=" not in first
+
+
+def test_parse_search_form_tokens_extracts_inline_assignments():
+    html = textwrap.dedent(
+        """
+        <html>
+          <body>
+            <form>
+              <input type="hidden" name="__VIEWSTATE" value="viewstate-value" />
+              <input type="hidden" name="ftst" value="" />
+            </form>
+            <script>
+              document.getElementById('ftst').value = 'abc123token';
+              $('#other').val('ignored');
+              var ftst = 'should_not_override';
+            </script>
+          </body>
+        </html>
+        """
+    )
+
+    tokens = parse_search_form_tokens(html)
+
+    assert tokens["__VIEWSTATE"] == "viewstate-value"
+    assert tokens["ftst"] == "abc123token"
