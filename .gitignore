@@ -4,3 +4,5 @@ __pycache__/
 venv/
 htmls/
 .DS_Store
+data/
+results.json
