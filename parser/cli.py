@@ -46,6 +46,12 @@ def parse_args(argv: List[str] | None = None) -> argparse.Namespace:
         help="Neighborhoods to include (repeat for multiple neighborhoods)",
     )
     parser.add_argument(
+        "--zip-code",
+        dest="zip_codes",
+        action="append",
+        help="Zip codes to include (repeat for multiple zip codes)",
+    )
+    parser.add_argument(
         "--out",
         type=Path,
         help="Write extracted units to this JSON file",
@@ -62,6 +68,11 @@ def main(argv: List[str] | None = None) -> int:
         if args.neighborhoods
         else None
     )
+    zip_codes = (
+        {code for code in (item.strip() for item in args.zip_codes) if code}
+        if args.zip_codes
+        else None
+    )
 
     # Batch mode only: run all available scrapers over HTTP
     registry = available_scrapers()
@@ -75,6 +86,7 @@ def main(argv: List[str] | None = None) -> int:
         min_bedrooms=args.min_bedrooms,
         max_rent=args.max_rent,
         neighborhoods=neighborhoods,
+        zip_codes=zip_codes,
         scrapers=registry,
     )
 
