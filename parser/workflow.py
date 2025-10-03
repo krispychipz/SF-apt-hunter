@@ -159,7 +159,10 @@ def filter_units(
 def _prepare_registry(
     scrapers: Optional[Dict[str, ScraperFunc]] = None,
 ) -> Dict[str, ScraperFunc]:
-    registry = scrapers or available_scrapers()
+    if scrapers is None:
+        registry = available_scrapers()
+    else:
+        registry = scrapers
     return {_normalise_slug(slug): scraper for slug, scraper in registry.items()}
 
 

@@ -4,9 +4,13 @@ from __future__ import annotations
 
 import textwrap
 
+import requests
+
 from parser.scrapers.rentbt_scraper import (
+    HEADERS,
+    LANDING_URL,
+    _get_page,
     parse_listings,
-    parse_search_form_tokens,
     set_page_number,
 )
 
@@ -61,26 +65,52 @@ def test_set_page_number_updates_querystring():
     assert "PgNo=" not in first
 
 
-def test_parse_search_form_tokens_extracts_inline_assignments():
-    html = textwrap.dedent(
-        """
-        <html>
-          <body>
-            <form>
-              <input type="hidden" name="__VIEWSTATE" value="viewstate-value" />
-              <input type="hidden" name="ftst" value="" />
-            </form>
-            <script>
-              document.getElementById('ftst').value = 'abc123token';
-              $('#other').val('ignored');
-              var ftst = 'should_not_override';
-            </script>
-          </body>
-        </html>
-        """
-    )
+def test_headers_include_modern_chrome_fields():
+    assert "Upgrade-Insecure-Requests" in HEADERS
+    assert "Sec-Fetch-Site" in HEADERS
+    assert "Sec-Fetch-Mode" in HEADERS
+    assert "Sec-Fetch-User" in HEADERS
+    assert "Sec-Fetch-Dest" in HEADERS
+    assert HEADERS.get("sec-ch-ua") is not None
+    assert HEADERS.get("sec-ch-ua-mobile") == "?0"
+    assert HEADERS.get("sec-ch-ua-platform") == '"Windows"'
+    assert "Referer" not in HEADERS
 
-    tokens = parse_search_form_tokens(html)
 
-    assert tokens["__VIEWSTATE"] == "viewstate-value"
-    assert tokens["ftst"] == "abc123token"
+class _StubResponse:
+    def __init__(self, url: str, headers: dict[str, str]):
+        self.url = url
+        self._headers = headers
+        self.text = "ok"
+        self.cookies = requests.cookies.RequestsCookieJar()
+
+    def raise_for_status(self) -> None:  # pragma: no cover - trivial
+        return None
+
+
+class _StubClient:
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, dict[str, str]]] = []
+        self.cookies = requests.cookies.RequestsCookieJar()
+
+    def get(self, url: str, headers: dict[str, str], timeout: int):
+        self.calls.append((url, headers))
+        return _StubResponse(url, headers)
+
+
+def test_get_page_populates_referer_header_by_default():
+    client = _StubClient()
+
+    _get_page(LANDING_URL, client=client, timeout=5)
+
+    assert client.calls, "Expected at least one request to be recorded"
+    first_url, first_headers = client.calls[0]
+    assert first_url == LANDING_URL
+    assert first_headers["Referer"] == LANDING_URL
+
+    next_url = set_page_number(first_url, 2)
+    _get_page(next_url, client=client, timeout=5, referer=first_url)
+
+    assert len(client.calls) == 2
+    _, second_headers = client.calls[1]
+    assert second_headers["Referer"] == first_url

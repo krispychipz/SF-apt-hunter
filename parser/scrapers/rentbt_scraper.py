@@ -36,6 +36,14 @@ HEADERS = {
     "Accept-Language": "en-US,en;q=0.9",
     "Connection": "keep-alive",
     "Accept-Encoding": "gzip, deflate, br",
+    "Upgrade-Insecure-Requests": "1",
+    "Sec-Fetch-Site": "same-origin",
+    "Sec-Fetch-Mode": "navigate",
+    "Sec-Fetch-User": "?1",
+    "Sec-Fetch-Dest": "document",
+    "sec-ch-ua": '"Not.A/Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    "sec-ch-ua-mobile": "?0",
+    "sec-ch-ua-platform": '"Windows"',
 }
 
 LANDING_URL = "https://properties.rentbt.com/"
@@ -75,8 +83,9 @@ def _get_page(
     referer: Optional[str] = None,
 ) -> str:
     headers = HEADERS.copy()
-    if referer:
-        headers["Referer"] = referer
+    referer_header = referer or LANDING_URL
+    if referer_header:
+        headers["Referer"] = referer_header
 
     if httpx is not None and isinstance(client, httpx.Client):  # type: ignore[arg-type]
         response = client.get(url, headers=headers, timeout=httpx.Timeout(timeout))
