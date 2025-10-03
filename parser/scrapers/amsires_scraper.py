@@ -4,10 +4,12 @@ from __future__ import annotations
 
 import json
 import logging
+import re
 from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 
 import requests
+from bs4 import BeautifulSoup
 
 from parser.models import Unit
 
@@ -32,6 +34,27 @@ HEADERS = {
     "Referer": SEARCH_URL,
     "Connection": "keep-alive",
 }
+
+_number_re = re.compile(r"(\d+(?:\.\d+)?)")
+
+# Heuristic helpers for address and price parsing
+_address_has_digit_re = re.compile(r"\d")
+
+
+def _looks_like_street_address(text: Optional[str]) -> bool:
+    return bool(text and _address_has_digit_re.search(text))
+
+
+def _clean_price(text: Optional[str]) -> Optional[int]:
+    if not text:
+        return None
+    m = re.search(r"[\d,]+(?:\.\d+)?", text)
+    if not m:
+        return None
+    try:
+        return int(float(m.group(0).replace(",", "")))
+    except ValueError:
+        return None
 
 
 def _unwrap(value: Any, *, _seen: Optional[set[int]] = None) -> Optional[Any]:
@@ -147,6 +170,95 @@ def _to_float(val: Any) -> Optional[float]:
         return None
 
 
+def _join_nonempty(parts: Iterable[Any]) -> Optional[str]:
+    values: List[str] = []
+    for part in parts:
+        if part is None:
+            continue
+        text = str(part).strip()
+        if text:
+            values.append(text)
+    if not values:
+        return None
+    return ", ".join(values)
+
+
+def _compose_address(data: Dict[str, Any]) -> Optional[str]:
+    return _first_nonempty(
+        data.get("full_address"),
+        _join_nonempty(
+            (
+                data.get("address_address1"),
+                data.get("address_address2"),
+                data.get("address_city"),
+                data.get("address_state"),
+                data.get("address_postal_code"),
+            )
+        ),
+        _join_nonempty(
+            (
+                data.get("portfolio_address1"),
+                data.get("portfolio_address2"),
+                data.get("portfolio_city"),
+                data.get("portfolio_state"),
+                data.get("portfolio_postal_code"),
+            )
+        ),
+    )
+
+
+def _extract_unit_from_values(
+    entry: Dict[str, Any], *, base_url: str
+) -> Optional[Unit]:
+    data = entry.get("data") if isinstance(entry, dict) else None
+    if not isinstance(data, dict):
+        return None
+
+    address = _compose_address(data)
+    bedrooms = _to_float(data.get("bedrooms"))
+    bathrooms = _to_float(data.get("bathrooms"))
+    rent = _to_int(
+        data.get("market_rent")
+        or data.get("rent")
+        or data.get("min_rent")
+        or data.get("max_rent")
+    )
+    neighborhood = _first_nonempty(
+        data.get("address_city"),
+        data.get("portfolio_city"),
+    )
+
+    source_url = _first_nonempty(
+        data.get("rental_application_url"),
+        data.get("schedule_showing_url"),
+    )
+
+    listable_uid = data.get("listable_uid") or entry.get("page_item_url")
+    database_url = data.get("database_url")
+
+    if not source_url and listable_uid:
+        listing_path = f"listings/detail/{listable_uid}"
+        if isinstance(database_url, str) and database_url.strip():
+            source_url = urljoin(database_url, listing_path)
+        else:
+            source_url = urljoin(base_url, listing_path)
+
+    if source_url and source_url.startswith("/"):
+        source_url = urljoin(base_url, source_url)
+
+    if not address and not source_url:
+        return None
+
+    return Unit(
+        address=address,
+        bedrooms=bedrooms,
+        bathrooms=bathrooms,
+        rent=rent,
+        neighborhood=neighborhood,
+        source_url=source_url or base_url,
+    )
+
+
 def _extract_unit(item: Dict[str, Any], *, base_url: str) -> Optional[Unit]:
     address = _first_nonempty(
         _value(item, "address"),
@@ -200,6 +312,15 @@ def _extract_unit(item: Dict[str, Any], *, base_url: str) -> Optional[Unit]:
     if source_url and source_url.startswith("/"):
         source_url = urljoin(base_url, source_url)
 
+    # Require either: a detail URL, or any numeric attribute, or an address-like string with digits
+    is_detail_url = bool(
+        source_url
+        and ("/listings/detail/" in source_url or "appfolio.com/listings/detail" in source_url)
+    )
+    has_numeric_attr = any(v is not None for v in (bedrooms, bathrooms, rent))
+    if not is_detail_url and not has_numeric_attr and not _looks_like_street_address(address):
+        return None
+
     if not address and not source_url:
         return None
 
@@ -244,6 +365,20 @@ def _iter_listing_dicts(obj: Any, *, _seen: Optional[set[int]] = None) -> Iterab
 def parse_appfolio_json(data: Any, *, base_url: str) -> List[Unit]:
     units: List[Unit] = []
     seen: set[Tuple[Optional[str], str]] = set()
+
+    for entry in _extract_values_entries(data):
+        unit = _extract_unit_from_values(entry, base_url=base_url)
+        if not unit:
+            continue
+        key = (unit.address, unit.source_url)
+        if key in seen:
+            continue
+        seen.add(key)
+        units.append(unit)
+
+    if units:
+        return units
+
     for candidate in _iter_listing_dicts(data):
         unit = _extract_unit(candidate, base_url=base_url)
         if not unit:
@@ -253,14 +388,32 @@ def parse_appfolio_json(data: Any, *, base_url: str) -> List[Unit]:
             continue
         seen.add(key)
         units.append(unit)
+
     return units
+
+
+def _extract_values_entries(data: Any) -> Iterable[Dict[str, Any]]:
+    if isinstance(data, dict):
+        values = data.get("values")
+        if isinstance(values, list):
+            for entry in values:
+                if isinstance(entry, dict):
+                    yield entry
+        nested = data.get("data")
+        if isinstance(nested, (dict, list)):
+            yield from _extract_values_entries(nested)
+    elif isinstance(data, list):
+        for item in data:
+            yield from _extract_values_entries(item)
+
+
 
 
 def _extract_items(data: Any) -> Optional[List[Any]]:
     if isinstance(data, list):
         return data
     if isinstance(data, dict):
-        for key in ("items", "results"):
+        for key in ("items", "results", "values"):
             value = data.get(key)
             if isinstance(value, list):
                 return value
@@ -270,65 +423,101 @@ def _extract_items(data: Any) -> Optional[List[Any]]:
     return None
 
 
+def _html_unit_from_card(card: BeautifulSoup, base_url: str) -> Optional[Unit]:
+    # Source URL from the photo link
+    a = card.select_one(".photo a.slider-link[href]")
+    href = a.get("href") if a else None
+    source_url = urljoin(base_url, href) if href else base_url
+
+    # Address: prefer explicit address node, then aria-label, then slug fallback
+    addr = None
+    addr_el = card.select_one(".photo h2.address")
+    if addr_el:
+        addr = addr_el.get_text(strip=True)
+    if not addr and a and a.get("aria-label"):
+        addr = a["aria-label"].strip()
+    if not addr and href:
+        m = re.search(r"/listings/detail/([^/?#]+)", href)
+        if m:
+            addr = m.group(1).replace("-", " ").strip().title()
+
+    # Rent: <h3 class="rent"><div class="smaller">RENT</div>$7,200</h3>
+    rent_el = card.select_one("h3.rent")
+    rent = _clean_price(rent_el.get_text(" ", strip=True) if rent_el else None)
+
+    # Beds: <div class="amenities"><div class="feature beds">3 beds</div>...</div>
+    beds = None
+    beds_el = card.select_one(".amenities .feature.beds")
+    if beds_el:
+        m = _number_re.search(beds_el.get_text(" ", strip=True))
+        if m:
+            try:
+                beds = float(m.group(1))
+            except ValueError:
+                beds = None
+
+    # Baths: <div class="feature baths">1.5 baths</div>
+    baths = None
+    baths_el = card.select_one(".amenities .feature.baths")
+    if baths_el:
+        m = _number_re.search(baths_el.get_text(" ", strip=True))
+        if m:
+            try:
+                baths = float(m.group(1))
+            except ValueError:
+                baths = None
+
+    if not addr and not source_url:
+        return None
+
+    return Unit(
+        address=addr,
+        bedrooms=beds,
+        bathrooms=baths,
+        rent=rent,
+        neighborhood=None,
+        source_url=source_url,
+    )
+
+
+def parse_listings(html: str, *, base_url: str) -> List[Unit]:
+    """Parse AMS IRES HTML search results into Unit objects from div.listing-item cards only."""
+    soup = BeautifulSoup(html, "lxml")
+
+    # Only consider explicit listing-item cards
+    cards: List[BeautifulSoup] = list(soup.select("div.listing-item"))
+
+    units: List[Unit] = []
+    for card in cards:
+        u = _html_unit_from_card(card, base_url)
+        if u:
+            units.append(u)
+    return units
+
+
 def fetch_units(
     url: str = SEARCH_URL,
     *,
     timeout: int = 20,
+    # ...existing parameters retained for compatibility but unused in HTML mode...
     page_size: int = 100,
     max_pages: int = 10,
     language: str = "ENGLISH",
 ) -> List[Unit]:
-    """Fetch AMS IRES listings directly from the JSON API."""
+    """Fetch AMS IRES listings by requesting the HTML page and parsing div.listing-item cards."""
 
     session = requests.Session()
     session.headers.update(HEADERS)
 
-    try:
-        session.get(SEARCH_URL, timeout=timeout)
-    except requests.RequestException:
-        logger.debug("Warm-up request to %s failed", SEARCH_URL, exc_info=True)
+    response = session.get(url or SEARCH_URL, timeout=timeout)
+    response.raise_for_status()
+    html_text = response.text
 
-    api_url = url if "appfolio-listings/data" in url else API_URL
-    base_url = SEARCH_URL
-
-    units: List[Unit] = []
-    seen: set[Tuple[Optional[str], str]] = set()
-
-    for page_number in range(max_pages):
-        page_payload = json.dumps(
-            {"pageSize": page_size, "pageNumber": page_number},
-            separators=(",", ":"),
-        )
-        params = {"page": page_payload, "language": language}
-        response = session.get(api_url, params=params, timeout=timeout)
-        if response.status_code == 404:
-            break
-        response.raise_for_status()
-        try:
-            payload = response.json()
-        except ValueError:  # pragma: no cover - defensive guard
-            logger.warning("AMS IRES API returned non-JSON response")
-            break
-
-        items = _extract_items(payload)
-        page_units = parse_appfolio_json(payload, base_url=base_url)
-        if not page_units and not items:
-            break
-
-        for unit in page_units:
-            key = (unit.address, unit.source_url)
-            if key in seen:
-                continue
-            seen.add(key)
-            units.append(unit)
-
-        if items is not None and len(items) < page_size:
-            break
-
+    units = parse_listings(html_text, base_url=url or SEARCH_URL)
     return units
 
 
 fetch_units.default_url = SEARCH_URL  # type: ignore[attr-defined]
 
 
-__all__ = ["fetch_units", "parse_appfolio_json"]
+__all__ = ["fetch_units", "parse_appfolio_json", "parse_listings"]

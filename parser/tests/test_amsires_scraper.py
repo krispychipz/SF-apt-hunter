@@ -57,64 +57,71 @@ class DummySession:
 
 def test_parse_appfolio_json_extracts_units() -> None:
     api_data = {
-        "data": {
-            "items": [
-                {
-                    "attributes": {
-                        "address": {"value": "123 Main St"},
-                        "beds": {"value": "2"},
-                        "baths": {"value": "1"},
-                        "rent": {"value": "$2,500"},
-                        "neighborhood": {"value": "SOMA"},
-                        "listingUrl": {"value": "https://amsires.appfolio.com/listings/detail/unit-1"},
-                    }
-                },
-                {
-                    "attributes": {
-                        "location": {"text": "456 Market St"},
-                        "bedrooms": {"values": ["3"]},
-                        "bathrooms": {"value": 2},
-                        "price": {"rawValue": "3450"},
-                        "website": {"value": "/vacancies/unit-2"},
-                    }
-                },
-            ]
-        }
+        "name": "appfolio-listings",
+        "values": [
+            {
+                "data": {
+                    "full_address": "123 Main St, San Francisco, CA 94105",
+                    "bedrooms": 2,
+                    "bathrooms": 1.5,
+                    "market_rent": 4200,
+                    "database_url": "https://amsires.appfolio.com/",
+                    "listable_uid": "abc123",
+                    "address_city": "San Francisco",
+                }
+            },
+            {
+                "data": {
+                    "address_address1": "456 Market St",
+                    "address_city": "San Francisco",
+                    "address_state": "CA",
+                    "address_postal_code": "94107",
+                    "bedrooms": "3",
+                    "bathrooms": "2",
+                    "market_rent": "$5,000",
+                    "database_url": "https://amsires.appfolio.com/",
+                    "listable_uid": "def456",
+                    "portfolio_city": "San Francisco",
+                }
+            },
+        ],
     }
 
     units = parse_appfolio_json(api_data, base_url=SEARCH_URL)
     assert len(units) == 2
 
     first, second = units
-    assert first.address == "123 Main St"
-    assert first.rent == 2500
-    assert first.source_url == "https://amsires.appfolio.com/listings/detail/unit-1"
+    assert first.address == "123 Main St, San Francisco, CA 94105"
+    assert first.rent == 4200
+    assert first.source_url == "https://amsires.appfolio.com/listings/detail/abc123"
     assert pytest.approx(first.bedrooms or 0) == 2
-    assert pytest.approx(first.bathrooms or 0) == 1
-    assert first.neighborhood == "SOMA"
+    assert pytest.approx(first.bathrooms or 0) == 1.5
+    assert first.neighborhood == "San Francisco"
 
-    assert second.address == "456 Market St"
-    assert second.rent == 3450
-    assert second.source_url == "https://www.amsires.com/vacancies/unit-2"
+    assert second.address == "456 Market St, San Francisco, CA, 94107"
+    assert second.rent == 5000
+    assert second.source_url == "https://amsires.appfolio.com/listings/detail/def456"
     assert pytest.approx(second.bedrooms or 0) == 3
     assert pytest.approx(second.bathrooms or 0) == 2
+    assert second.neighborhood == "San Francisco"
 
 
 def test_fetch_units_queries_json_endpoint(monkeypatch: pytest.MonkeyPatch) -> None:
     api_payload = {
-        "data": {
-            "items": [
-                {
-                    "attributes": {
-                        "address": {"value": "789 Mission St"},
-                        "beds": {"value": "1"},
-                        "baths": {"value": "1"},
-                        "rent": {"value": "$3,000"},
-                        "listingUrl": {"value": "https://amsires.appfolio.com/listings/detail/unit-3"},
-                    }
+        "name": "appfolio-listings",
+        "values": [
+            {
+                "data": {
+                    "full_address": "789 Mission St, San Francisco, CA 94103",
+                    "bedrooms": 1,
+                    "bathrooms": 1,
+                    "market_rent": "$3,000",
+                    "database_url": "https://amsires.appfolio.com/",
+                    "listable_uid": "unit-3",
+                    "address_city": "San Francisco",
                 }
-            ]
-        }
+            }
+        ],
     }
 
     responses = [
@@ -128,7 +135,7 @@ def test_fetch_units_queries_json_endpoint(monkeypatch: pytest.MonkeyPatch) -> N
     units = fetch_units(timeout=5, page_size=2, language="ENGLISH")
 
     assert len(units) == 1
-    assert units[0].address == "789 Mission St"
+    assert units[0].address == "789 Mission St, San Francisco, CA 94103"
     assert units[0].rent == 3000
     assert units[0].source_url == "https://amsires.appfolio.com/listings/detail/unit-3"
 
@@ -142,37 +149,40 @@ def test_fetch_units_queries_json_endpoint(monkeypatch: pytest.MonkeyPatch) -> N
 
 def test_fetch_units_handles_pagination(monkeypatch: pytest.MonkeyPatch) -> None:
     page0 = {
-        "items": [
+        "values": [
             {
-                "attributes": {
-                    "address": {"value": "Unit 1"},
-                    "beds": {"value": "1"},
-                    "baths": {"value": "1"},
-                    "rent": {"value": "$2000"},
-                    "listingUrl": {"value": "https://amsires.appfolio.com/listings/detail/unit-1"},
+                "data": {
+                    "full_address": "Unit 1",
+                    "bedrooms": 1,
+                    "bathrooms": 1,
+                    "market_rent": "$2000",
+                    "database_url": "https://amsires.appfolio.com/",
+                    "listable_uid": "unit-1",
                 }
             },
             {
-                "attributes": {
-                    "address": {"value": "Unit 2"},
-                    "beds": {"value": "2"},
-                    "baths": {"value": "2"},
-                    "rent": {"value": "$4000"},
-                    "listingUrl": {"value": "https://amsires.appfolio.com/listings/detail/unit-2"},
+                "data": {
+                    "full_address": "Unit 2",
+                    "bedrooms": 2,
+                    "bathrooms": 2,
+                    "market_rent": "$4000",
+                    "database_url": "https://amsires.appfolio.com/",
+                    "listable_uid": "unit-2",
                 }
             },
         ]
     }
 
     page1 = {
-        "items": [
+        "values": [
             {
-                "attributes": {
-                    "address": {"value": "Unit 3"},
-                    "beds": {"value": "3"},
-                    "baths": {"value": "2"},
-                    "rent": {"value": "$4500"},
-                    "listingUrl": {"value": "https://amsires.appfolio.com/listings/detail/unit-3"},
+                "data": {
+                    "full_address": "Unit 3",
+                    "bedrooms": 3,
+                    "bathrooms": 2,
+                    "market_rent": "$4500",
+                    "database_url": "https://amsires.appfolio.com/",
+                    "listable_uid": "unit-3",
                 }
             }
         ]
