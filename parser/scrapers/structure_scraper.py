@@ -6,6 +6,7 @@ import random
 import re
 import time
 from dataclasses import dataclass
+
 from typing import Any, Iterable, List, Optional
 from urllib.parse import urljoin
 
@@ -32,8 +33,9 @@ except ModuleNotFoundError:  # pragma: no cover - fallback path
     sync_playwright = None  # type: ignore
 
 
-logger = logging.getLogger(__name__)
+logging.basicConfig(stream=sys.stderr, level=logging.INFO)
 
+logger = logging.getLogger(__name__)
 
 HEADERS = {
     "User-Agent": (
@@ -177,13 +179,18 @@ def _clean_float(text: Optional[str], kind: str) -> Optional[float]:
 
 def _candidate_listing_blocks(soup: BeautifulSoup) -> Iterable[Tag]:
     selectors = [
+        ".listing.js-listing",
         ".listing-item", ".property-item", "article.property", "article.listing",
         ".rentpress-listing-card", ".property", ".listing", ".rp-listing-card",
         ".grid-item", ".loop-item", ".listingCard"
     ]
     seen: set[int] = set()
     for sel in selectors:
-        for el in soup.select(sel):
+        found = soup.select(sel)
+        if found:
+            print(found[0].prettify())
+        print(f"Selector {sel} found {len(found)} blocks")
+        for el in found:
             if isinstance(el, Tag):
                 hid = id(el)
                 if hid not in seen:
@@ -308,6 +315,7 @@ def get_html(url: str, client: Any, referer: Optional[str] = None) -> str:
     timeout = httpx.Timeout(20.0) if httpx else 20.0  # type: ignore[union-attr]
     for attempt in range(1, attempts + 1):
         r = client.get(url, headers=headers, timeout=timeout)
+        r.encoding = "utf-8"
         if r.status_code == 200:
             logger.debug(
                 "Structure Properties HTTP %s on attempt %d (%d bytes)",
@@ -376,7 +384,7 @@ def fetch_units(url: str = SEARCH_URL, *, max_pages: int = 10, timeout: int = 20
 
             html = get_html(current_url, client, referer=referer if pages > 1 else None)
             soup = BeautifulSoup(html, "lxml")
-
+            print("DEBUG: All tag names in soup:", [tag.name for tag in soup.find_all(True)[:20]])
             blocks = list(_candidate_listing_blocks(soup))
             if not blocks:
                 blocks = soup.find_all("article")

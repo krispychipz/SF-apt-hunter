@@ -5,12 +5,21 @@ from __future__ import annotations
 import argparse
 import json
 import logging
+import logging.config
+import sys
 from pathlib import Path
 from typing import List
 
 from .extract import extract_units
 from .scrapers import available_scrapers, available_sites
 from .workflow import WorkflowResult, collect_units_from_sites, filter_units
+
+
+logging.getLogger("httpx").setLevel(logging.CRITICAL)
+logging.getLogger("httpcore").setLevel(logging.CRITICAL)
+logging.getLogger("h2").setLevel(logging.CRITICAL)
+logging.getLogger("hpack").setLevel(logging.CRITICAL)
+logging.getLogger("hyper").setLevel(logging.CRITICAL)
 
 def _configure_logging(verbose: bool) -> None:
     level = logging.DEBUG if verbose else logging.INFO
@@ -100,7 +109,7 @@ def main(argv: List[str] | None = None) -> int:
                     site_result.error,
                 )
 
-        _emit_units(result, args.pretty)
+        #_emit_units(result, args.pretty)
         return 0
 
     html_bytes = args.html.read_bytes()
@@ -117,7 +126,7 @@ def main(argv: List[str] | None = None) -> int:
         neighborhoods=neighborhoods,
     )
 
-    _emit_units(WorkflowResult.single_batch(units), args.pretty)
+    #_emit_units(WorkflowResult.single_batch(units), args.pretty)
     return 0
 
 

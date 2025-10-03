@@ -13,7 +13,10 @@ from bs4 import BeautifulSoup
 from parser.models import Unit
 
 logger = logging.getLogger(__name__)
-
+for name in ("httpx", "httpcore"):
+    logger = logging.getLogger(name)
+    logger.setLevel(logging.INFO)
+    logger.propagate = False  # optional: stop passing to root handlers
 try:  # pragma: no cover - optional dependency
     import httpx  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback path
@@ -179,9 +182,9 @@ def fetch_units(url: str = LISTINGS_URL, *, timeout: int = 20) -> List[Unit]:
         logger.debug("Chandler Properties warm-up fetched %d bytes", len(landing_html))
 
         # Main request with referer and cookies
-        referer = LISTINGS_URL if url != LISTINGS_URL else None
-        html = get_html(url, client, referer=referer)
-        return parse_listings(html, base_url=url)
+        # referer = LISTINGS_URL if url != LISTINGS_URL else None
+        # html = get_html(url, client, referer=referer)
+        return parse_listings(landing_html, base_url=url)
     finally:
         close_client()
 
