@@ -55,5 +55,12 @@ parser-cli --html downloads/mission.html --url https://example.com/listing-page 
 
 This command parses the saved HTML file, extracts unique listings, and prints a prettified JSON array—ready for downstream filtering and alerting logic.
 
+## Dynamic rendering support
+
+Some providers, such as Structure Properties, now require JavaScript execution to reveal their unit cards. The bundled scraper
+automatically uses Playwright when available to fetch the fully rendered markup. Install Playwright alongside the Python depende
+ncies and run `playwright install chromium` to ensure the headless browser is ready. The scraper will gracefully fall back to a
+traditional HTTP client if Playwright is missing, but dynamic-only listings may be absent from the results in that mode.
+
 ## Testing
 ⚠️ Tests not run (not requested).
