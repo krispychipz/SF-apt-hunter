@@ -5,6 +5,7 @@ import logging
 import random
 import re
 import time
+import sys
 from dataclasses import dataclass
 
 from typing import Any, Iterable, List, Optional
@@ -61,6 +62,8 @@ _PLAYWRIGHT_WAIT_SELECTOR = ",".join(
         "article.property",
         "article.listing",
         ".rentpress-listing-card",
+        "iframe[src*='showmojo']",
+        "iframe[src*='mapsearch']",
     ]
 )
 
@@ -187,9 +190,6 @@ def _candidate_listing_blocks(soup: BeautifulSoup) -> Iterable[Tag]:
     seen: set[int] = set()
     for sel in selectors:
         found = soup.select(sel)
-        if found:
-            print(found[0].prettify())
-        print(f"Selector {sel} found {len(found)} blocks")
         for el in found:
             if isinstance(el, Tag):
                 hid = id(el)
@@ -211,19 +211,48 @@ def _text(el: Optional[Tag]) -> str:
     return el.get_text(" ", strip=True) if el else ""
 
 def _extract_address(block: Tag) -> Optional[str]:
-    for sel in ["h2.address", "h3.address", ".address", ".property-title", ".listing-title", "h2", "h3"]:
+    # ShowMojo-specific structure
+    header = block.select_one(".listing-info-header")
+    if header:
+        street = _text(header.select_one(".listing-address-header"))
+        cityzip = _text(header.select_one(".listing-city-state-zip"))
+        if street:
+            addr = ", ".join([p for p in [street, cityzip] if p])
+            return addr or street
+
+    # Avoid grabbing the listing title (it's not an address)
+    for sel in [
+        "h2.address",
+        "h3.address",
+        ".address",
+        ".property-title",
+        ".property-address",
+        ".listing-address",
+        "h2",
+        "h3",
+    ]:
         el = block.select_one(sel)
         txt = _text(el)
         if txt and len(txt) > 5:
             return txt
+
+    # aria-label on anchors sometimes contains an address-like string
     a = block.select_one("a[aria-label]")
     if a and a.get("aria-label"):
         return a["aria-label"].strip()
-    a = block.select_one("a")
-    if a:
-        txt = _text(a)
-        if txt and len(txt) > 5:
-            return txt
+
+    # Fallback: derive from URL slug like /l/<uid>/1129-green-street-san-francisco-ca-94109
+    a = block.select_one("a[href]")
+    if a and a.get("href"):
+        m = re.search(r"/l/[^/]+/([^?]+)", a["href"])
+        if m:
+            slug = m.group(1)
+            # humanize slug
+            addr_from_slug = slug.replace("-", " ").strip()
+            # Capitalize words sensibly
+            addr_from_slug = " ".join(w.capitalize() for w in addr_from_slug.split())
+            return addr_from_slug
+
     return None
 
 def _extract_rent(block: Tag) -> Optional[int]:
@@ -384,10 +413,20 @@ def fetch_units(url: str = SEARCH_URL, *, max_pages: int = 10, timeout: int = 20
 
             html = get_html(current_url, client, referer=referer if pages > 1 else None)
             soup = BeautifulSoup(html, "lxml")
-            print("DEBUG: All tag names in soup:", [tag.name for tag in soup.find_all(True)[:20]])
             blocks = list(_candidate_listing_blocks(soup))
             if not blocks:
-                blocks = soup.find_all("article")
+                # Try embedded iframe (ShowMojo/MapSearch/AppFolio) where listings are rendered
+                iframe = soup.select_one("iframe[src*='showmojo'], iframe[src*='mapsearch'], iframe[src*='appfolio']")
+                if iframe and iframe.get("src"):
+                    iframe_url = urljoin(current_url, iframe["src"])
+                    logger.debug("Structure Properties found listings iframe: %s", iframe_url)
+                    iframe_html = get_html(iframe_url, client, referer=current_url)
+                    iframe_soup = BeautifulSoup(iframe_html, "lxml")
+                    blocks = list(_candidate_listing_blocks(iframe_soup))
+                    logger.debug("Structure Properties iframe yielded %d block(s)", len(blocks))
+                    # switch context to iframe soup for parsing
+                    soup = iframe_soup
+
             logger.debug(
                 "Structure Properties page %d (%s) yielded %d block(s)",
                 pages,
