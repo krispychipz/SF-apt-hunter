@@ -257,7 +257,16 @@ def _extract_address(block: Tag) -> Optional[str]:
     return None
 
 def _extract_rent(block: Tag) -> Optional[int]:
-    for sel in [".rent", ".price", ".listing-price", ".property-rent", ".rp-price", ".card-price", ".summary"]:
+    for sel in [
+        ".rent-info .price",
+        ".rent",
+        ".price",
+        ".listing-price",
+        ".property-rent",
+        ".rp-price",
+        ".card-price",
+        ".summary",
+    ]:
         el = block.select_one(sel)
         rent = _clean_price(_text(el))
         if rent is not None:
@@ -274,6 +283,19 @@ def _extract_beds(block: Tag) -> Optional[float]:
         val = _clean_float(_text(el), kind="beds")
         if val is not None:
             return val
+    # ShowMojo embeds bedroom counts inside icon wrappers; look for the bed icon.
+    for wrap in block.select(".listing-icon-wrap"):
+        icon = wrap.select_one("img")
+        if icon and "bed" in (icon.get("src", "") + icon.get("alt", "")).lower():
+            txt = _text(wrap)
+            if txt:
+                val = _clean_float(txt, kind="beds")
+                if val is not None:
+                    return val
+                try:
+                    return float(txt.strip())
+                except ValueError:
+                    continue
     txt = " ".join([t for t in block.stripped_strings])
     return _clean_float(txt, kind="beds")
 
@@ -296,8 +318,19 @@ def _extract_neighborhood(block: Tag) -> Optional[str]:
     return None
 
 def _extract_url(block: Tag, base_url: str) -> str:
-    a = block.select_one("a[href]")
-    href = a.get("href") if a else None
+    selectors = [
+        "a.js-view-listing-link[href]",
+        "a.js-wsi-schedule-link[href]",
+        "a[href*='/l/'][href]",
+        "a[href]",
+    ]
+    href = None
+    for sel in selectors:
+        a = block.select_one(sel)
+        if a:
+            href = a.get("href") or a.get("data-href")
+            if href:
+                break
     return urljoin(base_url, href) if href else base_url
 
 def _parse_block(block: Tag, base_url: str) -> Optional[Unit]:
