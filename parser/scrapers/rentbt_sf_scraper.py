@@ -12,6 +12,7 @@ from bs4 import BeautifulSoup
 
 from parser.heuristics import money_to_int, parse_bathrooms, parse_bedrooms
 from parser.models import Unit
+from .rentbt_scraper import apply_filter_params as _base_apply_filter_params
 
 try:  # pragma: no cover - optional dependency
     import httpx  # type: ignore
@@ -462,10 +463,14 @@ def fetch_units(
 
 
 fetch_units.default_url = BASE_URL  # type: ignore[attr-defined]
+fetch_units.apply_filter_params = _base_apply_filter_params  # type: ignore[attr-defined]
+
+apply_filter_params = _base_apply_filter_params
 
 
 __all__ = [
     "BASE_URL",
+    "apply_filter_params",
     "fetch_units",
     "parse_listings",
     "parse_search_form_tokens",
