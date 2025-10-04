@@ -91,7 +91,22 @@ def collect_units_from_sites(
         try:
             logger.debug("Running scraper for site '%s' (%s)", site.slug, site.url)
             if site.url:
-                extracted_units = scraper(site.url)
+                scraper_url = site.url
+                apply_filters = getattr(scraper, "apply_filter_params", None)
+                if callable(apply_filters):
+                    try:
+                        scraper_url = apply_filters(
+                            scraper_url,
+                            min_bedrooms=min_bedrooms,
+                            max_rent=max_rent,
+                            neighborhoods=neighborhoods,
+                            zip_codes=zip_codes,
+                        )
+                    except Exception:  # pragma: no cover - defensive
+                        logger.exception(
+                            "Failed to apply filters to scraper URL for site '%s'", site.slug
+                        )
+                extracted_units = scraper(scraper_url)
             else:
                 extracted_units = scraper()
             filtered_units = filter_units(

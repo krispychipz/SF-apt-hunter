@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import time
+from math import ceil
 from typing import Any, Dict, List, Optional
 
 from urllib.parse import parse_qs, urlencode, urlparse, urlunparse
@@ -122,6 +123,45 @@ def _merge_query_params(url: str, params: Dict[str, str]) -> str:
     return urlunparse(
         (parsed.scheme, parsed.netloc, parsed.path, parsed.params, new_query, parsed.fragment)
     )
+
+
+def _format_bedrooms(min_bedrooms: Optional[float]) -> Optional[str]:
+    if min_bedrooms is None:
+        return None
+    try:
+        bedrooms = ceil(float(min_bedrooms))
+    except (TypeError, ValueError):  # pragma: no cover - defensive
+        return None
+    if bedrooms < 0:
+        bedrooms = 0
+    return str(bedrooms)
+
+
+def apply_filter_params(
+    url: str,
+    *,
+    min_bedrooms: Optional[float] = None,
+    max_rent: Optional[int] = None,
+    **_: Any,
+) -> str:
+    """Return a RentBT search URL with CLI filters applied."""
+
+    params: Dict[str, str] = {}
+
+    bedrooms = _format_bedrooms(min_bedrooms)
+    if bedrooms is not None:
+        params["cmbBeds"] = bedrooms
+
+    if max_rent is not None:
+        try:
+            params["txtMaxRent"] = str(int(max_rent))
+        except (TypeError, ValueError):  # pragma: no cover - defensive
+            pass
+
+    if not params:
+        return url
+
+    return _merge_query_params(url, params)
 
 
 _SCRIPT_ASSIGNMENT_PATTERNS = (
@@ -370,6 +410,13 @@ def fetch_units(
 
 
 fetch_units.default_url = BASE_URL  # type: ignore[attr-defined]
+fetch_units.apply_filter_params = apply_filter_params  # type: ignore[attr-defined]
 
 
-__all__ = ["fetch_units", "parse_listings", "parse_search_form_tokens", "set_page_number"]
+__all__ = [
+    "apply_filter_params",
+    "fetch_units",
+    "parse_listings",
+    "parse_search_form_tokens",
+    "set_page_number",
+]

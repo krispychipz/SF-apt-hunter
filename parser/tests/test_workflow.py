@@ -163,6 +163,33 @@ def test_collect_units_uses_scraper_default_url_when_missing():
     assert [unit.address for unit in result.units] == ["333 Oak"]
 
 
+def test_collect_units_passes_filters_to_scraper_url():
+    site = Site(slug="rentbt", url="https://properties.rentbt.com/searchlisting.aspx?cmbBeds=0")
+
+    called_urls: list[str] = []
+
+    def scraper(url: str):
+        called_urls.append(url)
+        return [make_unit("111 Main", 2, 1, 3100, None, url)]
+
+    def apply_filters(url: str, *, min_bedrooms=None, max_rent=None, **_):
+        assert min_bedrooms == 2
+        assert max_rent == 3200
+        return f"{url}&cmbBeds=2&txtMaxRent=3200"
+
+    scraper.apply_filter_params = apply_filters  # type: ignore[attr-defined]
+
+    result = collect_units_from_sites(
+        [site],
+        min_bedrooms=2,
+        max_rent=3200,
+        scrapers={"rentbt": scraper},
+    )
+
+    assert called_urls == ["https://properties.rentbt.com/searchlisting.aspx?cmbBeds=0&cmbBeds=2&txtMaxRent=3200"]
+    assert [unit.source_url for unit in result.units] == called_urls
+
+
 def test_workflow_result_single_batch_wraps_units():
     units = [make_unit("X", 1, 1, 2000, "Mission", "https://example.com/x")]
     result = WorkflowResult.single_batch(units)

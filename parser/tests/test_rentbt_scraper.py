@@ -7,6 +7,7 @@ import textwrap
 import requests
 
 from parser.scrapers.rentbt_scraper import (
+    apply_filter_params,
     HEADERS,
     LANDING_URL,
     _get_page,
@@ -63,6 +64,24 @@ def test_set_page_number_updates_querystring():
     assert "PgNo=2" in second
     first = set_page_number(second, 1)
     assert "PgNo=" not in first
+
+
+def test_apply_filter_params_updates_rent_and_bedrooms():
+    base = (
+        "https://properties.rentbt.com/searchlisting.aspx?txtMaxRent=4000&cmbBeds=2&"
+        "txtCity=san%20francisco"
+    )
+    updated = apply_filter_params(base, min_bedrooms=2.2, max_rent=3450)
+
+    assert "txtMaxRent=3450" in updated
+    assert "cmbBeds=3" in updated
+
+
+def test_apply_filter_params_handles_missing_values():
+    base = "https://properties.rentbt.com/searchlisting.aspx?txtMaxRent=4000"
+    updated = apply_filter_params(base, min_bedrooms=None, max_rent=None)
+
+    assert updated == base
 
 
 def test_headers_include_modern_chrome_fields():

@@ -56,6 +56,14 @@ def test_parse_listings_handles_result_body_wrapper():
 
 def test_fetch_units_has_custom_default_url():
     assert scraper.fetch_units.default_url == scraper.BASE_URL  # type: ignore[attr-defined]
+    assert callable(getattr(scraper.fetch_units, "apply_filter_params", None))
+
+
+def test_apply_filter_params_aliases_rentbt_logic():
+    base = "https://properties.rentbt.com/searchlisting.aspx?cmbBeds=0"
+    updated = scraper.apply_filter_params(base, min_bedrooms=2.1)
+
+    assert "cmbBeds=3" in updated
 
 
 def test_fetch_units_debug_hook_and_header_profile():
