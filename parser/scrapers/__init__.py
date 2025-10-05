@@ -40,14 +40,14 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         missing.append(getattr(exc, "name", "chandlerproperties_scraper dependency"))
     else:
         registry["chandlerproperties"] = chandler_fetch
-
+    
     try:
         from .jacksongroup_scraper import fetch_units as jacksongroup_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
         missing.append(getattr(exc, "name", "jacksongroup_scraper dependency"))
     else:
         registry["jacksongroup"] = jacksongroup_fetch
-
+    
     try:
         from .structure_scraper import fetch_units as structure_fetch
     except ModuleNotFoundError as exc:
@@ -61,14 +61,14 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         missing.append(getattr(exc, "name", "rentbt_sf_scraper dependency"))
     else:
         registry["rentbt_sf"] = rentbt_sf_fetch
-    '''
+    
     try:
         from .rentsfnow_scraper import fetch_units as rentsfnow_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
         missing.append(getattr(exc, "name", "rentsfnow_scraper dependency"))
     else:
         registry["rentsfnow"] = rentsfnow_fetch
-
+    '''
     try:
         from .mosser_scraper import fetch_units as mosser_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path

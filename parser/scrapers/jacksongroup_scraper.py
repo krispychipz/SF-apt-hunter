@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import re
+import json
+import logging
 from typing import Any, Iterable, List, Optional
-from urllib.parse import urljoin
+from urllib.parse import urljoin, urlencode
 
 import requests
 
@@ -30,6 +32,10 @@ HEADERS = {
 }
 
 _NUMBER_RE = re.compile(r"\d+(?:\.\d+)?")
+
+logger = logging.getLogger(__name__)
+
+API_BASE = "https://www.jacksongroup.net/rts/collections/public/40476853/runtime/collection/appfolio-listings/data"
 
 
 def _iter_value_entries(obj: Any) -> Iterable[dict[str, Any]]:
@@ -214,14 +220,69 @@ def parse_appfolio_collection(data: Any, *, base_url: str = LISTINGS_URL) -> Lis
     return units
 
 
-def fetch_units(url: str = APPFOLIO_API_URL, *, timeout: int = 20) -> List[Unit]:
-    """Fetch Jackson Group listings from the published AppFolio JSON endpoint."""
+def _build_api_params(page_number: int, page_size: int = 100) -> dict[str, str]:
+    # page param must be JSON then URL-encoded by requests via params
+    page_obj = {"pageSize": page_size, "pageNumber": page_number}
+    return {
+        "page": json.dumps(page_obj, separators=(",", ":")),
+        "language": "ENGLISH",
+    }
 
-    response = requests.get(url, headers=HEADERS, timeout=timeout)
-    response.raise_for_status()
 
-    payload = response.json()
-    return parse_appfolio_collection(payload, base_url=LISTINGS_URL)
+def fetch_units(
+    url: str = LISTINGS_URL,
+    *,
+    timeout: int = 20,
+    max_pages: int = 10,
+    page_size: int = 100,
+) -> List[Unit]:
+    """Fetch Jackson Group listings from the AppFolio JSON endpoint (paginated)."""
+    all_units: List[Unit] = []
+    seen: set[tuple[Optional[str], str]] = set()
+
+    for page in range(max_pages):
+        params = _build_api_params(page, page_size)
+        try:
+            resp = requests.get(API_BASE, headers=HEADERS, params=params, timeout=timeout)
+        except Exception as e:
+            logger.debug("Page %d request failed: %s", page, e)
+            break
+
+        ctype = resp.headers.get("Content-Type", "")
+        if "json" not in ctype.lower():
+            logger.debug("Non-JSON response (page %d, content-type=%s); stopping.", page, ctype)
+            break
+
+        try:
+            payload = resp.json()
+        except ValueError:
+            logger.debug("JSON decode failed page %d; stopping.", page)
+            break
+
+        page_units = parse_appfolio_collection(payload, base_url=LISTINGS_URL)
+        if not page_units:
+            logger.debug("No units on page %d; stopping pagination.", page)
+            break
+
+        new_count = 0
+        for u in page_units:
+            key = (u.address, u.source_url)
+            if key in seen:
+                continue
+            seen.add(key)
+            all_units.append(u)
+            new_count += 1
+
+        logger.debug(
+            "JacksonGroup page %d: %d units (%d new, %d total)",
+            page, len(page_units), new_count, len(all_units)
+        )
+
+        if new_count == 0:
+            logger.debug("No new unique units page %d; stopping.", page)
+            break
+
+    return all_units
 
 
 fetch_units.default_url = LISTINGS_URL  # type: ignore[attr-defined]
