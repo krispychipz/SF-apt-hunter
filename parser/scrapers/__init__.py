@@ -69,6 +69,13 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
     else:
         registry["rentsfnow"] = rentsfnow_fetch
 
+    try:
+        from .mosser_scraper import fetch_units as mosser_fetch
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+        missing.append(getattr(exc, "name", "mosser_scraper dependency"))
+    else:
+        registry["mosser"] = mosser_fetch
+
     if not registry and missing:
         details = ", ".join(sorted(set(filter(None, missing))))
         raise RuntimeError(
