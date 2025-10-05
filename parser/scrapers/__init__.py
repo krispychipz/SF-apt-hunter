@@ -61,7 +61,14 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         missing.append(getattr(exc, "name", "rentbt_sf_scraper dependency"))
     else:
         registry["rentbt_sf"] = rentbt_sf_fetch
-    
+
+    try:
+        from .rentsfnow_scraper import fetch_units as rentsfnow_fetch
+    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
+        missing.append(getattr(exc, "name", "rentsfnow_scraper dependency"))
+    else:
+        registry["rentsfnow"] = rentsfnow_fetch
+
     if not registry and missing:
         details = ", ".join(sorted(set(filter(None, missing))))
         raise RuntimeError(
