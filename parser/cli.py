@@ -86,7 +86,7 @@ def main(argv: List[str] | None = None) -> int:
         min_bedrooms=args.min_bedrooms,
         max_rent=args.max_rent,
         neighborhoods=neighborhoods,
-        zip_codes=zip_codes,
+        zip_codes=args.zip_codes,  # NEW
         scrapers=registry,
     )
 

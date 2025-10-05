@@ -115,6 +115,7 @@ def collect_units_from_sites(
                 max_rent=max_rent,
                 neighborhoods=neighborhoods,
                 zip_codes=zip_codes,
+                logger=logging.getLogger(f"filter.{site.slug}"),
             )
             logger.debug(
                 "Scraper '%s' returned %d unit(s); %d unit(s) remain after filtering",
@@ -137,52 +138,72 @@ def collect_units_from_sites(
     return WorkflowResult(site_results)
 
 
-def filter_units(
-    units: Iterable[Unit],
+_ZIP_RE = re.compile(r"\b94\d{3}\b")
+
+def _infer_zip(unit):
+    if getattr(unit, "zip_code", None):
+        return unit.zip_code
+    if unit.address:
+        m = _ZIP_RE.search(unit.address)
+        if m:
+            return m.group(0)
+    if unit.neighborhood:
+        # optional fallback map (same as scraper if you want)
+        from parser.scrapers.rentsfnow_scraper import _NEIGHBORHOOD_ZIP_MAP  # type: ignore
+        z = _NEIGHBORHOOD_ZIP_MAP.get(unit.neighborhood.strip().lower())
+        if z:
+            return sorted(z)[0]
+    return None
+
+def _unit_matches(
+    u,
     *,
-    min_bedrooms: Optional[float] = None,
-    max_rent: Optional[int] = None,
-    neighborhoods: Optional[set[str]] = None,
-    zip_codes: Optional[set[str]] = None,
-) -> List[Unit]:
-    """Filter *units* according to user-provided criteria."""
+    min_bedrooms,
+    max_rent,
+    neighborhoods,
+    zip_codes,
+    logger,
+) -> bool:
+    # Bedrooms
+    if min_bedrooms is not None:
+        if u.bedrooms is None or u.bedrooms < min_bedrooms:
+            logger.debug("FILTER bedrooms: %s (need >= %s)", u.bedrooms, min_bedrooms)
+            return False
+    # Rent
+    if max_rent is not None:
+        if u.rent is None or u.rent > max_rent:
+            logger.debug("FILTER rent: %s (max %s)", u.rent, max_rent)
+            return False
+    # Neighborhood
+    if neighborhoods:
+        if not u.neighborhood or u.neighborhood.strip().lower() not in neighborhoods:
+            logger.debug("FILTER neighborhood: %r not in %s", u.neighborhood, neighborhoods)
+            return False
+    # ZIP (only if requested)
+    if zip_codes:
+        uzip = _infer_zip(u)
+        if uzip not in zip_codes:
+            logger.debug("FILTER zip: %r not in %s", uzip, zip_codes)
+            return False
+    return True
 
-    normalized_neighborhoods = (
-        {name.strip().lower() for name in neighborhoods if name.strip()}
-        if neighborhoods
-        else None
-    )
-    normalized_zip_codes = (
-        _normalise_zip_codes(zip_codes)
-        if zip_codes
-        else None
-    )
-
-    filtered: List[Unit] = []
-    for unit in units:
-        if min_bedrooms is not None:
-            if unit.bedrooms is None or unit.bedrooms < min_bedrooms:
-                continue
-
-        if max_rent is not None:
-            if unit.rent is None or unit.rent > max_rent:
-                continue
-
-        if normalized_neighborhoods is not None:
-            if (
-                unit.neighborhood is None
-                or unit.neighborhood.strip().lower() not in normalized_neighborhoods
-            ):
-                continue
-
-        if normalized_zip_codes:
-            address_zips = _extract_zip_codes(unit.address or "")
-            if not address_zips or address_zips.isdisjoint(normalized_zip_codes):
-                continue
-
-        filtered.append(unit)
-
-    return filtered
+def filter_units(units, *, min_bedrooms=None, max_rent=None,
+                 neighborhoods=None, zip_codes=None, logger=None):
+    neighborhoods = {n.strip().lower() for n in neighborhoods} if neighborhoods else set()
+    zip_codes = {z.strip() for z in zip_codes} if zip_codes else set()
+    logger = logger or logging.getLogger(__name__)
+    kept = []
+    for u in units:
+        if _unit_matches(
+            u,
+            min_bedrooms=min_bedrooms,
+            max_rent=max_rent,
+            neighborhoods=neighborhoods,
+            zip_codes=zip_codes,
+            logger=logger,
+        ):
+            kept.append(u)
+    return kept
 
 
 def _prepare_registry(

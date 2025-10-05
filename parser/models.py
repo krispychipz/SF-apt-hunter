@@ -16,6 +16,7 @@ class Unit:
     rent: Optional[int]
     neighborhood: Optional[str]
     source_url: str
+    zip_code: Optional[str] = None   # NEW
 
     def identity(self) -> Tuple[Optional[str], Optional[float], Optional[float], Optional[int]]:
         """Return a tuple suitable for deduplication."""
