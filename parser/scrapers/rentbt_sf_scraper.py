@@ -30,7 +30,7 @@ HEADERS = {
     "User-Agent": (
         "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
         "AppleWebKit/537.36 (KHTML, like Gecko) "
-        "Chrome/120.0.0.0 Safari/537.36"
+        "Chrome/124.0.0.0 Safari/537.36"
     ),
     "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
     "Accept-Language": "en-US,en;q=0.9",
@@ -41,9 +41,14 @@ HEADERS = {
     "Sec-Fetch-Mode": "navigate",
     "Sec-Fetch-User": "?1",
     "Sec-Fetch-Dest": "document",
-    "sec-ch-ua": '"Not.A/Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"',
+    # Add client hints often requested by CF (match UA)
+    "sec-ch-ua": "\"Chromium\";v=\"124\", \"Google Chrome\";v=\"124\", \";Not A Brand\";v=\"99\"",
+    "sec-ch-ua-platform": "\"Windows\"",
     "sec-ch-ua-mobile": "?0",
-    "sec-ch-ua-platform": '"Windows"',
+    "sec-ch-ua-arch": "\"x86\"",
+    "sec-ch-ua-bitness": "\"64\"",
+    "sec-ch-ua-full-version": "\"124.0.6367.91\"",
+    "sec-ch-ua-full-version-list": "\"Chromium\";v=\"124.0.6367.91\", \"Google Chrome\";v=\"124.0.6367.91\", \";Not A Brand\";v=\"99.0.0.0\"",
 }
 
 MINIMAL_HEADERS = {
@@ -187,18 +192,32 @@ def _get_page(
     timeout: int = 20,
     referer: Optional[str] = None,
     headers: Optional[Dict[str, str]] = None,
+    retries: int = 1,
+    delay: float = 0.8,
 ) -> str:
     request_headers = (headers or HEADERS).copy()
     if referer:
         request_headers["Referer"] = referer
-    if httpx is not None and isinstance(client, httpx.Client):  # type: ignore[arg-type]
-        response = client.get(url, headers=request_headers, timeout=httpx.Timeout(timeout))
-    else:
-        response = client.get(url, headers=request_headers, timeout=timeout)
-    response.raise_for_status()
-    if hasattr(response, "cookies") and hasattr(client, "cookies"):
-        client.cookies.update(response.cookies)  # type: ignore[attr-defined]
-    return response.text
+    attempt = 0
+    last_exc = None
+    while attempt <= retries:
+        attempt += 1
+        if httpx is not None and isinstance(client, httpx.Client):  # type: ignore[arg-type]
+            response = client.get(url, headers=request_headers, timeout=httpx.Timeout(timeout))
+        else:
+            response = client.get(url, headers=request_headers, timeout=timeout)
+        if response.status_code == 403 and "cf-mitigated" in {k.lower(): v for k, v in response.headers.items()}:
+            # Cloudflare challenge; try once more after short delay
+            last_exc = Exception(f"403 Cloudflare challenge (attempt {attempt})")
+            if attempt <= retries:
+                time.sleep(delay)
+                continue
+            response.raise_for_status()
+        response.raise_for_status()
+        if hasattr(response, "cookies") and hasattr(client, "cookies"):
+            client.cookies.update(response.cookies)  # type: ignore[attr-defined]
+        return response.text
+    raise last_exc or RuntimeError("Failed to fetch page")
 
 
 def _parse_address(listing: BeautifulSoup) -> Optional[str]:
@@ -363,9 +382,10 @@ def fetch_units(
         close_session = lambda: None
         _set_headers(http_session, headers)
     else:
+        # Disable HTTP/2 to reduce CF scrutiny
         if httpx is not None:
             http_session = httpx.Client(
-                http2=True,
+                http2=False,
                 follow_redirects=True,
                 headers=headers,
                 timeout=httpx.Timeout(timeout),

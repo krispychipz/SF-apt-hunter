@@ -18,7 +18,7 @@ from bs4 import BeautifulSoup, Tag
 from parser.models import Unit
 
 SEARCH_URL = "https://structureproperties.com/available-rentals/"
-
+LISTING_URL = "https://showmojo.com/"
 try:  # pragma: no cover - optional dependency
     import httpx  # type: ignore
 except ModuleNotFoundError:  # pragma: no cover - fallback path
@@ -331,7 +331,7 @@ def _extract_url(block: Tag, base_url: str) -> str:
             href = a.get("href") or a.get("data-href")
             if href:
                 break
-    return urljoin(base_url, href) if href else base_url
+    return urljoin(LISTING_URL, href) if href else base_url
 
 def _parse_block(block: Tag, base_url: str) -> Optional[Unit]:
     address = _extract_address(block)

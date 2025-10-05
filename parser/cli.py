@@ -13,9 +13,9 @@ from .scrapers import available_scrapers, available_sites
 from .workflow import collect_units_from_sites
 
 # Silence noisy HTTP client loggers only
-logging.getLogger("httpx").setLevel(logging.CRITICAL)
-logging.getLogger("httpcore").setLevel(logging.CRITICAL)
-logging.getLogger("h2").setLevel(logging.CRITICAL)
+#logging.getLogger("httpx").setLevel(logging.CRITICAL)
+#logging.getLogger("httpcore").setLevel(logging.CRITICAL)
+#logging.getLogger("h2").setLevel(logging.CRITICAL)
 logging.getLogger("hpack").setLevel(logging.CRITICAL)
 logging.getLogger("hyper").setLevel(logging.CRITICAL)
 

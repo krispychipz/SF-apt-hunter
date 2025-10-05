@@ -19,7 +19,7 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
         missing.append(getattr(exc, "name", "amsires_scraper dependency"))
     else:
         registry["amsires"] = amsires_fetch
-
+    
     try:
         from .anchorealty_scraper import fetch_units as anchorealty_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
@@ -55,13 +55,6 @@ def _load_default_scrapers() -> Dict[str, ScraperFunc]:
     else:
         registry["structure"] = structure_fetch
     
-    try:
-        from .rentbt_scraper import fetch_units as rentbt_fetch
-    except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
-        missing.append(getattr(exc, "name", "rentbt_scraper dependency"))
-    else:
-        registry["rentbt"] = rentbt_fetch
-
     try:
         from .rentbt_sf_scraper import fetch_units as rentbt_sf_fetch
     except ModuleNotFoundError as exc:  # pragma: no cover - optional dependency path
