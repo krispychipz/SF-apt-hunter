@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
-import re
 import logging
 from typing import List, Optional
 
 import requests
+from bs4 import BeautifulSoup
 
 from parser.models import Unit
 from parser.scrapers.jacksongroup_scraper import (
@@ -15,6 +15,9 @@ from parser.scrapers.jacksongroup_scraper import (
 )
 
 LISTINGS_URL = "https://www.gaetanirealestate.com/vacancies"
+
+# Prefer this AppFolio collection id; fallback to discovery if it fails
+COLLECTION_ID_OVERRIDE = "cd92d571"
 
 HEADERS = {
     "User-Agent": (
@@ -31,9 +34,65 @@ HEADERS = {
 _LOGGER = logging.getLogger(__name__)
 parse_appfolio_collection = _parse_appfolio_collection
 
-_COLLECTION_RE = re.compile(
-    r"/rts/collections/public/([a-f0-9]+)/runtime/collection/appfolio-listings/data", re.I
-)
+def _extract_sitealias_from_parameters(html_text: str) -> Optional[str]:
+    """Extract SiteAlias value from the window.Parameters script without regex.
+    Scans script tags for a window.Parameters object and pulls the quoted value after the SiteAlias key.
+    """
+    try:
+        soup = BeautifulSoup(html_text, "html.parser")
+    except Exception:
+        return None
+    for sc in soup.find_all("script"):
+        try:
+            text = sc.string or sc.get_text() or ""
+        except Exception:
+            continue
+        if not text or "window.Parameters" not in text or "SiteAlias" not in text:
+            continue
+        idx = 0
+        while True:
+            i = text.find("SiteAlias", idx)
+            if i == -1:
+                break
+            # Find the colon after the key
+            j = text.find(":", i)
+            if j == -1:
+                break
+            # Advance to first non-space char
+            k = j + 1
+            n = len(text)
+            while k < n and text[k] in (" ", "\t", "\r", "\n"):
+                k += 1
+            if k >= n:
+                break
+            ch = text[k]
+            if ch in ("'", '"'):
+                quote = ch
+                k += 1
+                start = k
+                # Find closing quote, allowing for simple escaped quotes
+                while k < n:
+                    if text[k] == "\\":
+                        k += 2
+                        continue
+                    if text[k] == quote:
+                        val = text[start:k]
+                        return val.strip()
+                    k += 1
+                # If no closing quote, abort this occurrence
+                idx = i + len("SiteAlias")
+                continue
+            else:
+                # Unquoted value; read until comma or newline
+                start = k
+                while k < n and text[k] not in (",", "\n", "\r", "}"):
+                    k += 1
+                val = text[start:k].strip()
+                if val:
+                    return val
+                idx = i + len("SiteAlias")
+        # continue scanning other scripts
+    return None
 
 def _discover_collection_id(session: requests.Session, timeout: int) -> Optional[str]:
     try:
@@ -42,10 +101,9 @@ def _discover_collection_id(session: requests.Session, timeout: int) -> Optional
     except Exception as e:
         _LOGGER.debug("Failed vacancies page fetch: %s", e)
         return None
-    m = _COLLECTION_RE.search(r.text)
-    if m:
-        cid = m.group(1)
-        _LOGGER.debug("Discovered collection id: %s", cid)
+    cid = _extract_sitealias_from_parameters(r.text)
+    if cid:
+        _LOGGER.debug("Discovered SiteAlias (collection id): %s", cid)
         return cid
     _LOGGER.debug("Collection id not found in vacancies HTML")
     return None
@@ -74,18 +132,36 @@ def fetch_units(
 ) -> List[Unit]:
     """Fetch Gaetani Real Estate listings from dynamic AppFolio collection."""
     session = requests.Session()
-    collection_id = _discover_collection_id(session, timeout)
-    if not collection_id:
-        _LOGGER.debug("No collection id discovered; aborting.")
-        return []
 
+    # Try override id first; fallback to discovery if first request fails
+    collection_id: Optional[str] = COLLECTION_ID_OVERRIDE
     api_url = _build_api_url(collection_id)
+
+    prefetched_payload = None
+    try:
+        prefetched_payload = _fetch_page(session, api_url, page_number=0, page_size=page_size, timeout=timeout)
+    except Exception as e:
+        _LOGGER.debug("Override collection id failed; falling back to discovery: %s", e)
+        collection_id = _discover_collection_id(session, timeout)
+        if not collection_id:
+            _LOGGER.debug("No collection id discovered; aborting.")
+            return []
+        api_url = _build_api_url(collection_id)
+        try:
+            prefetched_payload = _fetch_page(session, api_url, page_number=0, page_size=page_size, timeout=timeout)
+        except Exception as e2:
+            _LOGGER.debug("Fetch failed after discovery: %s", e2)
+            return []
+
     units: List[Unit] = []
     seen: set[tuple[Optional[str], str]] = set()
 
     for page_number in range(max_pages):
         try:
-            payload = _fetch_page(session, api_url, page_number=page_number, page_size=page_size, timeout=timeout)
+            if page_number == 0 and prefetched_payload is not None:
+                payload = prefetched_payload
+            else:
+                payload = _fetch_page(session, api_url, page_number=page_number, page_size=page_size, timeout=timeout)
         except requests.HTTPError as e:
             _LOGGER.debug("HTTP error page %d: %s", page_number, e)
             break
