@@ -80,6 +80,53 @@ def test_parse_property_page_extracts_unit_details():
     assert unit.neighborhood == "Alamo Square"
 
 
+def test_parse_property_page_uses_inline_ldjson_payload():
+    html = textwrap.dedent(
+        """
+        <div class="rentpress-remove-link-decoration">
+          <a href="/floorplans/junior-1-bedroom-plan-6/">
+            <div class="rentpress-shortcode-floorplan-card">
+              <div class="v-card__title"> Junior 1 Bedroom - Plan 6 </div>
+              <div class="v-card__subtitle"><div><span> </span></div></div>
+              <script type="application/ld+json">
+              {
+                "@context": "https://schema.org/",
+                "@type": "Product",
+                "about": {
+                  "@type": "FloorPlan",
+                  "name": "Junior 1 Bedroom - Plan 6",
+                  "url": "https://www.mosserliving.com/floorplans/junior-1-bedroom-plan-6/",
+                  "numberOfBedrooms": "1",
+                  "numberOfBathroomsTotal": "1"
+                },
+                "offers": {
+                  "@type": "AggregateOffer",
+                  "lowPrice": "2125",
+                  "priceCurrency": "USD"
+                }
+              }
+              </script>
+            </div>
+          </a>
+        </div>
+        """
+    )
+
+    units = ms.parse_property_page(
+        html,
+        property_url="https://www.mosserliving.com/apartments/1008-larkin/",
+        address="1008 Larkin St",
+        neighborhood="Nob Hill",
+    )
+
+    assert len(units) == 1
+    unit = units[0]
+    assert unit.bedrooms == 1.0
+    assert unit.bathrooms == 1.0
+    assert unit.rent == 2125
+    assert unit.source_url == "https://www.mosserliving.com/floorplans/junior-1-bedroom-plan-6/"
+
+
 class _StubResponse:
     def __init__(self, text: str) -> None:
         self.text = text
