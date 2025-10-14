@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import logging
-from typing import Any, List, Optional, Tuple
+from dataclasses import dataclass
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 from urllib.parse import urljoin
 import html  # NEW
-import re
 
 import requests
 from bs4 import BeautifulSoup, Tag
@@ -39,10 +39,11 @@ except Exception:
 
 def _extract_json_data(tag: Tag) -> Optional[dict[str, Any]]:
     script = tag.find("script", attrs={"type": "application/ld+json"})
-    if not script or not script.string:
+    text = _script_text(script) if script else None
+    if not text:
         return None
     try:
-        data = json.loads(script.string)
+        data = json.loads(text)
     except json.JSONDecodeError:
         _LOGGER.debug("Failed to parse JSON-LD block", exc_info=True)
         return None
@@ -54,6 +55,16 @@ def _extract_json_data(tag: Tag) -> Optional[dict[str, Any]]:
     if isinstance(data, dict):
         return data
     return None
+
+
+def _script_text(script: Tag) -> Optional[str]:
+    if script is None:
+        return None
+    if script.string and script.string.strip():
+        return script.string.strip()
+    text = script.get_text()
+    text = text.strip()
+    return text or None
 
 
 def _decode_data_properties_attr(raw: str) -> Optional[list[dict[str, Any]]]:
@@ -99,93 +110,22 @@ _FLOORPLAN_FALLBACK_SELECTORS = [
     "article.rentpress-floorplan-card",
 ]
 
-_PRICE_RE = re.compile(r"\$[\d,]+")
-_BEDS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:bed|bd|beds)\b", re.I)
-_BATHS_RE = re.compile(r"(\d+(?:\.\d+)?)\s*(?:bath|ba|baths)\b", re.I)
 
-# Additional regexes for structured JSON extraction
-_JSON_OBJ_WITH_BEDS_RE = re.compile(r"\{[^{}]*?bedrooms[^{}]*?\}", re.IGNORECASE | re.DOTALL)
-_JSON_ARRAY_RE = re.compile(r"\[[\s\S]*?\]")
-_NUMBER_RE = re.compile(r"(\d+(?:\.\d+)?)")
-_RENT_NUM_RE = re.compile(r"\$?\s*([0-9][0-9,]{2,})")
-
-
-def _try_parse_json_fragment(text: str) -> Optional[Any]:
-    text = text.strip().rstrip(',;')
-    try:
-        return json.loads(text)
-    except Exception:
-        return None
-
-
-def _harvest_floorplan_dicts_from_script(script_text: str) -> list[dict[str, Any]]:
-    """Attempt to recover floorplan/unit dictionaries from inline script content.
-    Heuristics:
-      1. Direct JSON arrays containing objects with 'bed' or 'bath'.
-      2. Individual object fragments matched by _JSON_OBJ_WITH_BEDS_RE.
-      3. window.* assignments: split at '=' and parse RHS if JSON-looking.
-    Returns list of dicts with at least one of bedrooms/baths/rent detected.
-    """
-    results: list[dict[str, Any]] = []
-    lowered = script_text.lower()
-    if 'bed' not in lowered and 'bath' not in lowered:
-        return results
-
-    # Strategy 1: Arrays first
-    for m in _JSON_ARRAY_RE.finditer(script_text):
-        frag = m.group(0)
-        if 'bed' not in frag.lower() and 'bath' not in frag.lower():
-            continue
-        parsed = _try_parse_json_fragment(frag)
-        if isinstance(parsed, list):
-            for item in parsed:
-                if isinstance(item, dict) and any(k in item for k in ('bedrooms', 'beds', 'bathrooms', 'baths')):
-                    results.append(item)
-
-    # Strategy 2: Standalone object fragments
-    for m in _JSON_OBJ_WITH_BEDS_RE.finditer(script_text):
-        frag = m.group(0)
-        parsed = _try_parse_json_fragment(frag)
-        if isinstance(parsed, dict):
-            if any(k in parsed for k in ('bedrooms', 'beds', 'bathrooms', 'baths')):
-                results.append(parsed)
-
-    # Strategy 3: window.* = {...}; style assignments
-    if not results:
-        for line in script_text.splitlines():
-            if '=' in line and ('window.' in line or 'var ' in line or 'const ' in line):
-                rhs = line.split('=', 1)[1].strip()
-                if not (rhs.startswith('{') or rhs.startswith('[')):
-                    continue
-                candidate = _try_parse_json_fragment(rhs)
-                if isinstance(candidate, dict):
-                    # maybe nested list
-                    for v in candidate.values():
-                        if isinstance(v, list):
-                            for item in v:
-                                if isinstance(item, dict) and any(k in item for k in ('bedrooms', 'beds', 'bathrooms', 'baths')):
-                                    results.append(item)
-                elif isinstance(candidate, list):
-                    for item in candidate:
-                        if isinstance(item, dict) and any(k in item for k in ('bedrooms', 'beds', 'bathrooms', 'baths')):
-                            results.append(item)
-    return results
-
+@dataclass
+class _RenderedDetail:
+    html: str
+    ldjson_payloads: List[str]
 
 def _extract_basic_fields(text: str) -> Tuple[Optional[float], Optional[float], Optional[int]]:
-    beds = baths = None
-    rent = None
-    m = _BEDS_RE.search(text)
-    if m:
-        try: beds = float(m.group(1))
-        except ValueError: pass
-    m = _BATHS_RE.search(text)
-    if m:
-        try: baths = float(m.group(1))
-        except ValueError: pass
-    prices = [int(p.replace("$","").replace(",","")) for p in _PRICE_RE.findall(text)]
-    if prices:
-        rent = min(prices)
+    """Best-effort extraction of beds/baths/rent from inline card text."""
+
+    if not text:
+        return None, None, None
+
+    beds = parse_bedrooms(text)
+    baths = parse_bathrooms(text)
+    rent = money_to_int(text)
+
     return beds, baths, rent
 
 
@@ -304,10 +244,11 @@ def _extract_floorplan_details(tag: Tag) -> Tuple[Optional[float], Optional[floa
 
 def _parse_floorplan_ldjson(card: Tag) -> Tuple[Optional[float], Optional[float], Optional[int]]:
     script = card.find("script", attrs={"type": "application/ld+json"})
-    if not script or not script.string:
+    text = _script_text(script) if script else None
+    if not text:
         return None, None, None
     try:
-        data = json.loads(script.string)
+        data = json.loads(text)
     except Exception:
         return None, None, None
     # Schema can be Product with about: FloorPlan
@@ -373,13 +314,45 @@ def _extract_price_int(*vals: Any) -> Optional[int]:
     return None
 
 
-def _extract_floorplans_from_ldjson(soup: BeautifulSoup, *, property_url: str, address: Optional[str], neighborhood: Optional[str]) -> List[Unit]:
-    units: List[Unit] = []
-    scripts = soup.find_all("script", attrs={"type": "application/ld+json"})
-    for sc in scripts:
-        raw = sc.string
-        if not raw:
+def _merge_unit_details(existing: Unit, candidate: Unit) -> Unit:
+    return Unit(
+        address=existing.address or candidate.address,
+        bedrooms=candidate.bedrooms if candidate.bedrooms is not None else existing.bedrooms,
+        bathrooms=candidate.bathrooms if candidate.bathrooms is not None else existing.bathrooms,
+        rent=candidate.rent if candidate.rent is not None else existing.rent,
+        neighborhood=existing.neighborhood or candidate.neighborhood,
+        source_url=existing.source_url,
+        zip_code=getattr(existing, "zip_code", None),
+    )
+
+
+def _extract_floorplans_from_ldjson(
+    soup: BeautifulSoup,
+    *,
+    property_url: str,
+    address: Optional[str],
+    neighborhood: Optional[str],
+    extra_payloads: Iterable[str] = (),
+) -> List[Unit]:
+    payloads: list[str] = []
+    seen: set[str] = set()
+    for sc in soup.find_all("script", attrs={"type": "application/ld+json"}):
+        text = _script_text(sc)
+        if not text or text in seen:
             continue
+        seen.add(text)
+        payloads.append(text)
+    for raw in extra_payloads:
+        if not isinstance(raw, str):
+            continue
+        cleaned = raw.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        payloads.append(cleaned)
+
+    unit_by_source: Dict[str, Unit] = {}
+    for raw in payloads:
         try:
             parsed = json.loads(raw)
         except Exception:
@@ -388,37 +361,69 @@ def _extract_floorplans_from_ldjson(soup: BeautifulSoup, *, property_url: str, a
             if not isinstance(obj, dict):
                 continue
             atype = obj.get("@type") or obj.get("type")
-            # Pattern 1: Product with 'about' FloorPlan
             if atype == "Product" and isinstance(obj.get("about"), dict):
                 fp = obj["about"]
                 if fp.get("@type") == "FloorPlan":
                     beds = _extract_value_as_float(fp.get("numberOfBedrooms"))
-                    baths = _extract_value_as_float(fp.get("numberOfBathroomsTotal") or fp.get("numberOfBathrooms"))
+                    baths = _extract_value_as_float(
+                        fp.get("numberOfBathroomsTotal") or fp.get("numberOfBathrooms")
+                    )
                     offers = obj.get("offers") if isinstance(obj.get("offers"), dict) else None
                     rent = None
                     if offers:
-                        rent = _extract_price_int(offers.get("lowPrice"), offers.get("highPrice"), offers.get("price"))
+                        rent = _extract_price_int(
+                            offers.get("lowPrice"), offers.get("highPrice"), offers.get("price")
+                        )
                     link = fp.get("url") or obj.get("url") or property_url
                     source_url = urljoin(property_url, link) if isinstance(link, str) else property_url
-                    units.append(Unit(address=address, bedrooms=beds, bathrooms=baths, rent=rent, neighborhood=neighborhood, source_url=source_url))
+                    candidate = Unit(
+                        address=address,
+                        bedrooms=beds,
+                        bathrooms=baths,
+                        rent=rent,
+                        neighborhood=neighborhood,
+                        source_url=source_url,
+                    )
+                    existing = unit_by_source.get(source_url)
+                    unit_by_source[source_url] = (
+                        _merge_unit_details(existing, candidate) if existing else candidate
+                    )
                     _LOGGER.debug(
                         "LD+JSON fp: beds=%s baths=%s rent=%s url=%s",
-                        beds, baths, rent, source_url
+                        beds,
+                        baths,
+                        rent,
+                        source_url,
                     )
-            # Pattern 2: Direct FloorPlan object
             elif atype == "FloorPlan":
                 beds = _extract_value_as_float(obj.get("numberOfBedrooms") or obj.get("bedrooms"))
-                baths = _extract_value_as_float(obj.get("numberOfBathroomsTotal") or obj.get("numberOfBathrooms") or obj.get("bathrooms"))
-                rent = None  # Rent often only present in wrapping Product/AggregateOffer
+                baths = _extract_value_as_float(
+                    obj.get("numberOfBathroomsTotal")
+                    or obj.get("numberOfBathrooms")
+                    or obj.get("bathrooms")
+                )
+                rent = None
                 link = obj.get("url") or property_url
                 source_url = urljoin(property_url, link) if isinstance(link, str) else property_url
-                units.append(Unit(address=address, bedrooms=beds, bathrooms=baths, rent=rent, neighborhood=neighborhood, source_url=source_url))
+                candidate = Unit(
+                    address=address,
+                    bedrooms=beds,
+                    bathrooms=baths,
+                    rent=rent,
+                    neighborhood=neighborhood,
+                    source_url=source_url,
+                )
+                existing = unit_by_source.get(source_url)
+                unit_by_source[source_url] = (
+                    _merge_unit_details(existing, candidate) if existing else candidate
+                )
+    units = list(unit_by_source.values())
     if units:
         _LOGGER.debug("Mosser LD+JSON extracted %d floorplan units from %s", len(units), property_url)
     return units
 
 
-def _debug_ldjson_presence(html: str):
+def _debug_ldjson_presence(html: str, extra_payloads: Iterable[str] = ()):  # pragma: no cover - diagnostics
     """Lightweight diagnostic to count ld+json and occurrences of key fields."""
     try:
         soup = BeautifulSoup(html, "lxml")
@@ -428,21 +433,38 @@ def _debug_ldjson_presence(html: str):
     sample = 0
     has_bed_kw = 0
     for sc in scripts:
-        if not sc.string:
+        text = _script_text(sc)
+        if not text:
             continue
         sample += 1
-        if "numberOfBedrooms" in sc.string or "FloorPlan" in sc.string:
+        lowered = text.lower()
+        if "numberofbedrooms" in lowered or "floorplan" in lowered:
             has_bed_kw += 1
-    _LOGGER.debug("Mosser detail diagnostics: %d ld+json scripts (%d with floorplan hints)", sample, has_bed_kw)
+    for payload in extra_payloads:
+        if not isinstance(payload, str):
+            continue
+        cleaned = payload.strip()
+        if not cleaned:
+            continue
+        sample += 1
+        lowered = cleaned.lower()
+        if "numberofbedrooms" in lowered or "floorplan" in lowered:
+            has_bed_kw += 1
+    _LOGGER.debug(
+        "Mosser detail diagnostics: %d ld+json scripts (%d with floorplan hints)",
+        sample,
+        has_bed_kw,
+    )
 
 
 def _parse_card_inline_ldjson(card: Tag) -> Tuple[Optional[float], Optional[float], Optional[int]]:
     """Parse the single <script type=application/ld+json> inside a floorplan card."""
     script = card.find("script", attrs={"type": "application/ld+json"})
-    if not script or not script.string:
+    text = _script_text(script) if script else None
+    if not text:
         return None, None, None
     try:
-        data = json.loads(script.string)
+        data = json.loads(text)
     except Exception:
         return None, None, None
     # Reuse logic from _parse_floorplan_ldjson but simplified
@@ -464,38 +486,53 @@ def _parse_card_inline_ldjson(card: Tag) -> Tuple[Optional[float], Optional[floa
 
 
 # --- JS rendering helper (add before parse_property_page) ---
-def _render_detail_with_playwright(detail_url: str, timeout: int, wait_selector: str) -> Optional[str]:
+def _render_detail_with_playwright(
+    detail_url: str, timeout: int, wait_selector: str
+) -> Optional[_RenderedDetail]:
     if sync_playwright is None:
         return None
     try:
         with sync_playwright() as pw:
             browser = pw.chromium.launch(headless=True)
-            context = browser.new_context(user_agent=HEADERS.get("User-Agent"))
-            page = context.new_page()
-            page.set_default_timeout(timeout * 1000)
-            page.goto(detail_url, wait_until="domcontentloaded")
-            # Progressive waits: scroll & wait for selector or LD+JSON growth
-            baseline = 0
-            for step in range(6):
-                # Count existing LD+JSON with floorplan hints
-                count = page.evaluate(
-                    """() => Array.from(document.querySelectorAll("script[type='application/ld+json']")).filter(s=>/numberOfBedrooms|FloorPlan/i.test(s.textContent||"")).length"""
+            context = None
+            try:
+                context = browser.new_context(user_agent=HEADERS.get("User-Agent"))
+                page = context.new_page()
+                page.set_default_timeout(timeout * 1000)
+                page.goto(detail_url, wait_until="domcontentloaded")
+                for _ in range(6):
+                    count = page.evaluate(
+                        """() => Array.from(document.querySelectorAll("script[type='application/ld+json']"))
+                        .filter(s => /numberOfBedrooms|FloorPlan/i.test((s.textContent || ''))).length"""
+                    )
+                    if isinstance(count, (int, float)) and count > 0:
+                        break
+                    page.evaluate("""() => window.scrollTo(0, document.body.scrollHeight)""")
+                    try:
+                        page.wait_for_selector(wait_selector, timeout=1000)
+                        break
+                    except Exception:
+                        pass
+                    page.wait_for_timeout(500)
+                html = page.content()
+                raw_payloads = page.evaluate(
+                    """() => Array.from(document.querySelectorAll("script[type='application/ld+json']"))
+                    .map(s => s.textContent || '').filter(Boolean)"""
                 )
-                if count > 0:
-                    break
-                # Scroll to trigger lazy load
-                page.evaluate("""() => window.scrollTo(0, document.body.scrollHeight)""")
+            finally:
                 try:
-                    page.wait_for_selector(wait_selector, timeout=1000)
-                    break
-                except Exception:
-                    pass
-                baseline = count
-                page.wait_for_timeout(500)
-            content = page.content()
-            context.close()
-            browser.close()
-            return content
+                    if context is not None:
+                        context.close()
+                finally:
+                    browser.close()
+            payloads: list[str] = []
+            if isinstance(raw_payloads, list):
+                for item in raw_payloads:
+                    if isinstance(item, str):
+                        cleaned = item.strip()
+                        if cleaned:
+                            payloads.append(cleaned)
+            return _RenderedDetail(html=html, ldjson_payloads=payloads)
     except Exception as exc:
         _LOGGER.debug("Playwright render failed %s: %s", detail_url, exc)
         return None
@@ -519,11 +556,17 @@ def parse_property_page(
       4. JS render fallback (Playwright) if still empty and allowed.
       5. Final property-level heuristic.
     """
-    def _extract_all(html_text: str) -> List[Unit]:
+    def _extract_all(html_text: str, *, ldjson_payloads: Iterable[str] = ()) -> List[Unit]:
         soup = BeautifulSoup(html_text, "lxml")
 
         # (1) Page-level LD+JSON
-        ldjson_units = _extract_floorplans_from_ldjson(soup, property_url=property_url, address=address, neighborhood=neighborhood)
+        ldjson_units = _extract_floorplans_from_ldjson(
+            soup,
+            property_url=property_url,
+            address=address,
+            neighborhood=neighborhood,
+            extra_payloads=ldjson_payloads,
+        )
         if ldjson_units:
             return ldjson_units
 
@@ -565,6 +608,8 @@ def parse_property_page(
                 ba = ba or tba
                 r = r or tr
             a = card.find("a", href=True)
+            if not a:
+                a = card.find_parent("a", href=True)
             src = urljoin(property_url, a["href"]) if a else property_url
             units.append(Unit(address=address, bedrooms=b, bathrooms=ba, rent=(r if (r is None or r >= 500) else None), neighborhood=neighborhood, source_url=src))
         if units:
@@ -580,14 +625,20 @@ def parse_property_page(
 
     # (4) JS render fallback
     if allow_js and sync_playwright is not None:
-        rendered_html = _render_detail_with_playwright(
-            property_url, timeout, "div.rentpress-shortcode-floorplan-card script[type='application/ld+json']"
+        rendered = _render_detail_with_playwright(
+            property_url,
+            timeout,
+            "div.rentpress-shortcode-floorplan-card script[type='application/ld+json']",
         )
-        if rendered_html:
-            _debug_ldjson_presence(rendered_html)
-            units = _extract_all(rendered_html)
+        if rendered:
+            _debug_ldjson_presence(rendered.html, rendered.ldjson_payloads)
+            units = _extract_all(rendered.html, ldjson_payloads=rendered.ldjson_payloads)
             if units:
-                _LOGGER.debug("Mosser: JS render produced %d floorplan units for %s", len(units), property_url)
+                _LOGGER.debug(
+                    "Mosser: JS render produced %d floorplan units for %s",
+                    len(units),
+                    property_url,
+                )
                 return units
 
     # (5) Final property-level heuristic single unit
