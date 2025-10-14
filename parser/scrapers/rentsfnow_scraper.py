@@ -36,7 +36,7 @@ HEADERS: Dict[str, str] = {
 
 # Neighborhood -> ZIP mapping (scoped to this scraper only)
 _NEIGHBORHOOD_ZIP_MAP: Dict[str, Set[str]] = {
-    "downtown": {"94102", "94103"},
+    "downtown": {"94103"},
     "soma": {"94103"},
     "nopa": {"94117"},
     "western addition": {"94115", "94117"},
